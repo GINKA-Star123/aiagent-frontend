@@ -1,17 +1,44 @@
-# flutter_client
+# AIAgent Mobile
 
-A new Flutter project.
+Flutter 手机端，当前进入 `1.0.0-rc.1+1`。
 
-## Getting Started
+## 快速运行
 
-This project is a starting point for a Flutter application.
+```powershell
+cd F:\aiagent\apps\flutter_client
+flutter pub get
+flutter run
+```
 
-A few resources to get you started if this is your first Flutter project:
+首次启动后，在设置页把 API 地址改成电脑后端的局域网地址，例如：
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+```text
+http://192.168.x.x:8000
+```
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## V1.0 RC 验证
+
+```powershell
+cd F:\aiagent\apps\flutter_client
+dart format lib test
+flutter analyze
+flutter test
+flutter build apk --release
+```
+
+真机手动验收项见 [docs/v1-release-checklist.md](docs/v1-release-checklist.md)。
+
+## Android 签名
+
+Release 构建会读取 `android/key.properties`。文件不存在时会使用 debug signing，方便内测安装，但不能作为正式外发包。
+
+`android/key.properties` 示例：
+
+```properties
+storePassword=your-store-password
+keyPassword=your-key-password
+keyAlias=upload
+storeFile=../upload-keystore.jks
+```
+
+keystore 和 `key.properties` 不要提交到仓库。
