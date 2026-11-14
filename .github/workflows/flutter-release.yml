@@ -54,6 +54,14 @@ jobs:
             "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
           chmod 600 android/key.properties android/app/release.jks
 
+      - name: Require signing for tag releases
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if [ ! -f android/key.properties ]; then
+            echo "::error::Tag releases require signing secrets (ANDROID_KEYSTORE_BASE64, ANDROID_STORE_PASSWORD, ANDROID_KEY_PASSWORD, ANDROID_KEY_ALIAS)."
+            exit 1
+          fi
+
       - name: Analyze
         run: flutter analyze
 

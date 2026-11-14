@@ -151,7 +151,8 @@ android/local.properties
 [Convert]::ToBase64String([IO.File]::ReadAllBytes("android/app/release.jks")) | Set-Clipboard
 ```
 
-未配置 `ANDROID_KEYSTORE_BASE64` 时，CI 会给出警告并使用 debug 签名（仅适合自测）。
+- 手动 **Run workflow**：未配置 `ANDROID_KEYSTORE_BASE64` 时会警告并使用 debug 签名（仅自测）。
+- 推送 `v*` tag：**必须**配置签名 Secrets，否则工作流直接失败，避免发出 debug 签名的正式 release。
 
 ## 目录结构
 
