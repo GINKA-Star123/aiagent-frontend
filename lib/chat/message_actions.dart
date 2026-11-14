@@ -8,10 +8,9 @@ class MessageActions {
     required BuildContext context,
     required ChatMessage message,
     required ValueChanged<ChatMessage> onPlayAudio,
+    ValueChanged<ChatMessage>? onRetry,
   }) async {
-    final hasAudio =
-        message.audioUrl.isNotEmpty ||
-        (message.live2d?.character.mouth.audioUrl ?? '').isNotEmpty;
+    final hasAudio = message.audioUrl.isNotEmpty;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -21,6 +20,16 @@ class MessageActions {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (message.status == ChatMessageStatus.failed ||
+                  message.status == ChatMessageStatus.queued)
+                ListTile(
+                  leading: const Icon(Icons.refresh),
+                  title: const Text('重试发送'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    onRetry?.call(message);
+                  },
+                ),
               ListTile(
                 leading: const Icon(Icons.copy_outlined),
                 title: const Text('复制文本'),

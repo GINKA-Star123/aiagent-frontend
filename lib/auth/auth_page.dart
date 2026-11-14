@@ -246,18 +246,6 @@ class _GlassAuthBackdrop extends StatelessWidget {
       fit: StackFit.expand,
       children: [
         const ColoredBox(color: Color(0xFFEAF2EE)),
-        Align(
-          alignment: Alignment.bottomCenter,
-          child: Image.asset(
-            'assets/live2d_web/fallback_yzl.png',
-            fit: BoxFit.contain,
-            height: MediaQuery.sizeOf(context).height * 0.52,
-            opacity: const AlwaysStoppedAnimation(0.07),
-            errorBuilder: (context, error, stackTrace) {
-              return const SizedBox.shrink();
-            },
-          ),
-        ),
         ColoredBox(color: Colors.white.withValues(alpha: 0.30)),
       ],
     );

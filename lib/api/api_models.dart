@@ -1,5 +1,3 @@
-import '../live2d/live2d_payload.dart';
-
 class HealthResponse {
   const HealthResponse({
     required this.status,
@@ -31,9 +29,10 @@ class ChatResponse {
     required this.expression,
     required this.audioPath,
     required this.audioUrl,
-    required this.live2d,
     required this.metadata,
     required this.requestId,
+    this.degraded = false,
+    this.retryAfterSeconds = 0,
   });
 
   final bool ok;
@@ -45,15 +44,17 @@ class ChatResponse {
   final String expression;
   final String audioPath;
   final String audioUrl;
-  final Live2DPayload? live2d;
   final Map<String, dynamic> metadata;
   final String requestId;
+
+  /// 后端降级回复：ok=false 但带一句可用的话术，客户端照常展示。
+  final bool degraded;
+  final int retryAfterSeconds;
 
   factory ChatResponse.fromJson(
     Map<String, dynamic> json, {
     required String apiBaseUrl,
   }) {
-    final live2dRaw = json['live2d'];
     final metadataRaw = json['metadata'];
 
     return ChatResponse(
@@ -66,20 +67,15 @@ class ChatResponse {
       expression: json['expression']?.toString() ?? '',
       audioPath: json['audio_path']?.toString() ?? '',
       audioUrl: _resolveUrl(json['audio_url']?.toString() ?? '', apiBaseUrl),
-      live2d: live2dRaw is Map
-          ? Live2DPayload.fromJson(
-              live2dRaw.map(
-                (key, dynamic value) => MapEntry(key.toString(), value),
-              ),
-              apiBaseUrl: apiBaseUrl,
-            )
-          : null,
       metadata: metadataRaw is Map
           ? metadataRaw.map(
               (key, dynamic value) => MapEntry(key.toString(), value),
             )
           : <String, dynamic>{},
       requestId: json['request_id']?.toString() ?? '',
+      degraded: json['degraded'] == true,
+      retryAfterSeconds:
+          int.tryParse(json['retry_after_seconds']?.toString() ?? '') ?? 0,
     );
   }
 
@@ -196,4 +192,70 @@ class VoiceCallTurnResponse {
       raw: json,
     );
   }
+}
+
+class SessionOpeningResponse {
+  const SessionOpeningResponse({
+    required this.ok,
+    required this.kind,
+    required this.text,
+    required this.shouldSpeak,
+    required this.presenceState,
+    required this.mood,
+    required this.suggestedDelayMs,
+    required this.raw,
+  });
+
+  final bool ok;
+  final String kind;
+  final String text;
+  final bool shouldSpeak;
+  final String presenceState;
+  final String mood;
+  final int suggestedDelayMs;
+  final Map<String, dynamic> raw;
+
+  factory SessionOpeningResponse.fromJson(
+    Map<String, dynamic> json, {
+    required String apiBaseUrl,
+  }) {
+    final opening = _mapValue(json['opening']);
+    final presence = _mapValue(json['presence']);
+
+    return SessionOpeningResponse(
+      ok: json['ok'] != false,
+      kind: opening['kind']?.toString() ?? 'first_meet',
+      text: opening['text']?.toString() ?? '',
+      shouldSpeak: opening['should_speak'] != false,
+      presenceState: presence['state']?.toString() ?? 'listening',
+      mood: presence['mood']?.toString() ?? 'neutral',
+      suggestedDelayMs: 600,
+      raw: json,
+    );
+  }
+
+  String get statusText {
+    if (presenceState == 'sleepy') {
+      return '低能量陪伴中';
+    }
+    if (presenceState == 'working' || presenceState == 'focused') {
+      return '刚从专注状态切回来';
+    }
+    if (presenceState == 'reading') {
+      return '刚刚在整理资料';
+    }
+    return '已进入交流状态';
+  }
+}
+
+Map<String, dynamic> _mapValue(Object? value) {
+  if (value is Map<String, dynamic>) {
+    return value;
+  }
+
+  if (value is Map) {
+    return value.map((key, dynamic item) => MapEntry(key.toString(), item));
+  }
+
+  return <String, dynamic>{};
 }

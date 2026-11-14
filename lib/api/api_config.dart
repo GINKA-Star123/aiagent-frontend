@@ -1,5 +1,7 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'cloud_config.dart';
+
 class ApiConfig {
   const ApiConfig({
     required this.environment,
@@ -16,9 +18,10 @@ class ApiConfig {
   static const String _timeoutSecondsKey = 'api.timeoutSeconds';
 
   factory ApiConfig.defaults() {
-    return const ApiConfig(
-      environment: 'dev',
-      apiBaseUrl: 'http://192.168.0.111:8000',
+    const definedBaseUrl = CloudConfig.apiBaseUrl;
+    return ApiConfig(
+      environment: definedBaseUrl.startsWith('https://') ? 'cloud' : 'dev',
+      apiBaseUrl: definedBaseUrl,
       timeoutSeconds: 120,
     );
   }

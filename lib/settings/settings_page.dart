@@ -302,7 +302,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 contentPadding: EdgeInsets.zero,
                 secondary: const Icon(Icons.volume_up_outlined),
                 title: const Text('自动播放语音'),
-                subtitle: const Text('回复后自动播放语音并驱动 Live2D 口型'),
+                subtitle: const Text('回复后自动播放语音'),
                 value: _autoPlayVoice,
                 onChanged: _setAutoPlayVoice,
               ),

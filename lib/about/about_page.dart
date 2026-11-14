@@ -70,11 +70,6 @@ class AboutPage extends StatelessWidget {
                 title: '记忆',
                 value: '查看和清空当前用户的长期记忆',
               ),
-              _AboutTile(
-                icon: Icons.view_in_ar_outlined,
-                title: 'Live2D',
-                value: '过渡模型已接入，支持待机动作和说话口型',
-              ),
             ],
           ),
           const SizedBox(height: 16),

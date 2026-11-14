@@ -24,6 +24,21 @@
 	<string>????</string>
 	<key>CFBundleVersion</key>
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>AIAgent needs microphone access for voice chat and ASR.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>AIAgent needs camera access for multimodal image chat.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>AIAgent needs photo access for sending images in multimodal chat.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>AIAgent may save generated media when you choose to keep it.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>

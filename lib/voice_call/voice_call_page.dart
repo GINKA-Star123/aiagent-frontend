@@ -7,7 +7,6 @@ import '../api/api_models.dart';
 import '../audio/audio_playback_service.dart';
 import '../audio/recorder_service.dart';
 import '../identity/user_identity.dart';
-import '../live2d/live2d_payload.dart';
 
 class VoiceCallPage extends StatefulWidget {
   const VoiceCallPage({
@@ -17,7 +16,6 @@ class VoiceCallPage extends StatefulWidget {
     required this.audioPlaybackService,
     required this.recorderService,
     required this.onAssistantResponse,
-    required this.onLive2DChanged,
     required this.onSpeakingChanged,
   });
 
@@ -27,7 +25,6 @@ class VoiceCallPage extends StatefulWidget {
   final RecorderService recorderService;
   final Future<void> Function(VoiceCallTurnResponse response)
   onAssistantResponse;
-  final ValueChanged<Live2DPayload?> onLive2DChanged;
   final Future<void> Function(bool speaking) onSpeakingChanged;
 
   @override
@@ -163,11 +160,10 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
       );
 
       await widget.onAssistantResponse(response);
-      widget.onLive2DChanged(response.chat.live2d);
 
       final audioUrl = response.chat.audioUrl.isNotEmpty
           ? response.chat.audioUrl
-          : response.chat.live2d?.character.mouth.audioUrl ?? '';
+          : '';
       if (audioUrl.isNotEmpty) {
         await widget.onSpeakingChanged(true);
         await widget.audioPlaybackService.playUrl(audioUrl);

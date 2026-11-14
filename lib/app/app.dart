@@ -2,12 +2,15 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:uuid/uuid.dart';
 
 import '../about/about_page.dart';
 import '../api/api_client.dart';
 import '../api/api_config.dart';
 import '../api/api_models.dart';
+import '../auth/activation_page.dart';
 import '../auth/auth_page.dart';
 import '../audio/audio_playback_service.dart';
 import '../audio/recorder_service.dart';
@@ -17,13 +20,16 @@ import '../chat/chat_message.dart';
 import '../chat/memory_status.dart';
 import '../chat/message_actions.dart';
 import '../connectivity/backend_status.dart';
+import '../core/activation.dart';
+import '../core/feedback_store.dart';
+import '../core/outbox.dart';
+import '../core/session_store.dart';
+import '../core/telemetry.dart';
 import '../identity/identity_store.dart';
 import '../identity/user_identity.dart';
-import '../live2d/live2d_bridge.dart';
-import '../live2d/live2d_payload.dart';
-import '../live2d/live2d_stage_view.dart';
 import '../memory/memory_page.dart';
 import '../profile/profile_page.dart';
+import '../session/presence_opening_gate.dart';
 import '../settings/app_preferences.dart';
 import '../settings/settings_page.dart';
 import '../theme/app_theme.dart';
@@ -50,7 +56,8 @@ class ChatHomePage extends StatefulWidget {
   State<ChatHomePage> createState() => _ChatHomePageState();
 }
 
-class _ChatHomePageState extends State<ChatHomePage> {
+class _ChatHomePageState extends State<ChatHomePage>
+    with WidgetsBindingObserver {
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final ImagePicker _imagePicker = ImagePicker();
@@ -61,23 +68,40 @@ class _ChatHomePageState extends State<ChatHomePage> {
   late final AppPreferences _preferences;
   late final AudioPlaybackService _audioPlaybackService;
   late final RecorderService _recorderService;
+  late final PresenceOpeningGate _presenceOpeningGate;
+  late final SessionStore _sessionStore;
+  late final OutboxStore _outboxStore;
+  late final FeedbackStore _feedbackStore;
+  Map<String, Map<String, dynamic>> _feedback = {};
+  TelemetryService? _telemetry;
+
+  final Uuid _uuid = const Uuid();
+  List<OutboxEntry> _outbox = [];
+  bool _online = true;
+  bool _flushingOutbox = false;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
+  Timer? _outboxTimer;
+
+  static const bool _authUiEnabled = bool.fromEnvironment(
+    'AUTH_UI_ENABLED',
+    defaultValue: false,
+  );
 
   StreamSubscription<bool>? _speakingSubscription;
-  Live2DBridge? _live2dBridge;
 
   ApiConfig _apiConfig = ApiConfig.defaults();
   UserIdentity? _identity;
-  Live2DPayload? _currentLive2D;
   BackendStatus _backendStatus = BackendStatus.unknown();
   List<ChatMessage> _messages = [];
 
   bool _apiClientReady = false;
+  bool _needsActivation = false;
   bool _loading = true;
   bool _sending = false;
   bool _speaking = false;
   bool _recording = false;
   bool _autoPlayVoice = true;
-  bool _chatPanelExpanded = false;
+  bool _openingRequested = false;
   String _statusText = '正在初始化...';
   String _selectedImagePath = '';
 
@@ -89,6 +113,8 @@ class _ChatHomePageState extends State<ChatHomePage> {
     _speakingSubscription = _audioPlaybackService.speakingStream.listen(
       _handleSpeakingChanged,
     );
+    WidgetsBinding.instance.addObserver(this);
+    _initConnectivity();
     _bootstrap();
   }
 
@@ -97,6 +123,9 @@ class _ChatHomePageState extends State<ChatHomePage> {
     _textController.dispose();
     _scrollController.dispose();
     _speakingSubscription?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
+    _connectivitySub?.cancel();
+    _outboxTimer?.cancel();
     _audioPlaybackService.dispose();
     _recorderService.dispose();
     if (_apiClientReady) {
@@ -108,31 +137,120 @@ class _ChatHomePageState extends State<ChatHomePage> {
   Future<void> _bootstrap() async {
     _identityStore = IdentityStore();
     _historyStore = ChatHistoryStore();
+    _presenceOpeningGate = const PresenceOpeningGate();
+    _sessionStore = SessionStore();
+    _outboxStore = OutboxStore();
+    _feedbackStore = FeedbackStore();
     _preferences = await AppPreferences.load();
 
-    final config = await ApiConfig.load();
-    final identity = await _identityStore.load();
-    final history = await _historyStore.load();
+    final storedCode = await _sessionStore.loadActivationCode();
+    final envCode = ActivationConfig.rawFromEnvironment();
+    final rawCode = (storedCode != null && storedCode.isNotEmpty)
+        ? storedCode
+        : (envCode.isEmpty ? null : envCode);
 
-    _apiConfig = config;
-    _apiClient = ApiClient(config: config);
-    _apiClientReady = true;
+    if (rawCode == null) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _needsActivation = true;
+        _statusText = '需要激活';
+      });
+      return;
+    }
+
+    await _applyActivation(rawCode);
+  }
+
+  Future<void> _applyActivation(String rawCode) async {
+    ActivationConfig config;
+    try {
+      config = ActivationConfig.decode(rawCode);
+    } on ActivationException catch (error) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _loading = false;
+        _needsActivation = true;
+        _statusText = error.message;
+      });
+      return;
+    }
+
+    final history = await _historyStore.load();
+    final existing = await _identityStore.load();
+    final sameUser = existing != null && existing.userId == config.userId;
+    final identity = UserIdentity(
+      userId: config.userId,
+      username: sameUser && existing.username.isNotEmpty
+          ? existing.username
+          : config.username,
+      deviceId:
+          existing?.deviceId ??
+          'device_${DateTime.now().millisecondsSinceEpoch}',
+      createdAt: existing?.createdAt ?? DateTime.now(),
+      accessToken: config.token,
+      refreshToken: existing?.refreshToken ?? '',
+    );
+    await _identityStore.save(identity);
 
     if (!mounted) {
       return;
     }
 
+    final apiConfig = ApiConfig(
+      environment: config.primaryBaseUrl.startsWith('https://')
+          ? 'cloud'
+          : 'dev',
+      apiBaseUrl: config.primaryBaseUrl,
+      timeoutSeconds: 120,
+    );
+
+    final apiClient = ApiClient(
+      config: apiConfig,
+      token: config.token,
+      baseUrls: config.baseUrls,
+    );
+    _telemetry = TelemetryService(
+      sender: (batchId, app, events) => apiClient.sendTelemetryBatch(
+        batchId: batchId,
+        app: app,
+        events: events,
+      ),
+      appVersion: const String.fromEnvironment(
+        'APP_VERSION',
+        defaultValue: '1.3.0',
+      ),
+      platform: Platform.operatingSystem,
+    );
     setState(() {
+      _apiConfig = apiConfig;
+      _apiClient = apiClient;
+      _apiClientReady = true;
       _identity = identity;
       _messages = history;
       _autoPlayVoice = _preferences.autoPlayVoice;
       _loading = false;
-      _statusText = identity == null ? '请先登录' : '准备好了';
+      _needsActivation = false;
+      _statusText = '准备好了';
     });
 
-    if (identity != null) {
-      await _checkHealth(silentWhenConnected: true);
+    await _restoreOutbox();
+    _feedback = await _feedbackStore.load();
+    final telemetry = _telemetry;
+    if (telemetry != null) {
+      unawaited(telemetry.flush());
     }
+    await _checkHealth(silentWhenConnected: true);
+    await _openPresenceSession();
+  }
+
+  Future<void> _handleActivated(String rawCode) async {
+    await _sessionStore.saveActivationCode(rawCode);
+    await _applyActivation(rawCode);
   }
 
   Future<UserIdentity> _login({
@@ -171,23 +289,27 @@ class _ChatHomePageState extends State<ChatHomePage> {
     setState(() {
       _identity = identity;
       _statusText = statusText;
+      _openingRequested = false;
     });
     await _checkHealth(silentWhenConnected: true);
+    await _openPresenceSession();
   }
 
   Future<void> _logout() async {
     await _audioPlaybackService.stop();
+    await _sessionStore.clear();
     await _identityStore.clear();
     if (!mounted) {
       return;
     }
     setState(() {
       _identity = null;
-      _currentLive2D = null;
+      _needsActivation = true;
       _selectedImagePath = '';
       _sending = false;
       _recording = false;
       _speaking = false;
+      _openingRequested = false;
       _statusText = '已退出登录';
     });
   }
@@ -199,7 +321,79 @@ class _ChatHomePageState extends State<ChatHomePage> {
     setState(() {
       _speaking = speaking;
     });
-    await _live2dBridge?.setSpeaking(speaking);
+  }
+
+  Future<void> _openPresenceSession({bool force = false}) async {
+    final identity = _identity;
+    if (identity == null || !_apiClientReady || (!force && _openingRequested)) {
+      return;
+    }
+
+    _openingRequested = true;
+
+    if (!force) {
+      final shouldShow = await _presenceOpeningGate.shouldShow(
+        userId: identity.userId,
+      );
+      if (!shouldShow) {
+        return;
+      }
+    }
+
+    try {
+      final opening = await _apiClient.openSession(
+        userId: identity.userId,
+        username: identity.username,
+        recentTopic: _lastUserFacingTopic(),
+      );
+
+      if (!mounted || opening.text.trim().isEmpty) {
+        return;
+      }
+
+      setState(() {
+        _statusText = opening.statusText;
+      });
+
+      await Future<void>.delayed(
+        Duration(milliseconds: opening.suggestedDelayMs),
+      );
+
+      if (!mounted || !opening.shouldSpeak) {
+        return;
+      }
+
+      final message = ChatMessage.assistant(
+        text: opening.text,
+        emotion: opening.mood,
+      );
+      final nextMessages = [..._messages, message];
+
+      setState(() {
+        _messages = nextMessages;
+        _statusText = opening.statusText;
+      });
+
+      await _presenceOpeningGate.markShown(userId: identity.userId);
+      await _historyStore.save(nextMessages);
+      _scrollToBottomLater();
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _statusText = '准备好了';
+      });
+    }
+  }
+
+  String _lastUserFacingTopic() {
+    for (final message in _messages.reversed) {
+      if (message.role == ChatRole.user && message.text.trim().isNotEmpty) {
+        return message.text.trim();
+      }
+    }
+    return '';
   }
 
   Future<void> _checkHealth({bool silentWhenConnected = false}) async {
@@ -226,9 +420,13 @@ class _ChatHomePageState extends State<ChatHomePage> {
         return;
       }
       final friendly = ChatErrorText.friendly(error);
+      final authFailure = ApiClient.isAuthFailure(error);
       setState(() {
         _backendStatus = BackendStatus.disconnected(friendly);
-        _statusText = friendly;
+        _statusText = authFailure ? '激活已失效，请重新激活' : friendly;
+        if (authFailure) {
+          _needsActivation = true;
+        }
       });
     }
   }
@@ -240,76 +438,389 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
     if ((rawText.isEmpty && imagePath.isEmpty) ||
         identity == null ||
-        _sending ||
         _recording) {
       return;
     }
 
     final text = rawText.isEmpty ? '请看看这张图片。' : rawText;
-    final userMessage = ChatMessage.user(text: text, imagePath: imagePath);
+    final message = ChatMessage.user(
+      text: text,
+      imagePath: imagePath,
+      clientMessageId: _newClientMessageId(),
+      status: ChatMessageStatus.sending,
+    );
 
     setState(() {
-      _messages = [..._messages, userMessage];
+      _messages = [..._messages, message];
       _textController.clear();
       _selectedImagePath = '';
       _sending = true;
-      _chatPanelExpanded = true;
       _statusText = imagePath.isEmpty ? '正在发送...' : '正在发送图片...';
     });
-
+    await _historyStore.save(_messages);
     _scrollToBottomLater();
 
+    await _deliverMessage(message, identity);
+  }
+
+  Future<void> _deliverMessage(
+    ChatMessage message,
+    UserIdentity identity, {
+    bool manageSending = true,
+    bool voice = false,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    var httpStatus = 0;
+    var degradedOutcome = false;
+    var ttsPlayed = false;
     try {
-      if (imagePath.isEmpty) {
-        await _sendTextToChat(text: text, identity: identity);
-      } else {
-        await _sendImageToChat(
-          text: text,
-          identity: identity,
-          imagePath: imagePath,
-        );
-      }
+      final response = message.imagePath.isEmpty
+          ? await _apiClient.sendChat(
+              userId: identity.userId,
+              username: identity.username,
+              text: message.text,
+              clientMessageId: message.clientMessageId,
+            )
+          : await _apiClient.sendMultimodalChat(
+              userId: identity.userId,
+              username: identity.username,
+              text: message.text,
+              imagePath: message.imagePath,
+              clientMessageId: message.clientMessageId,
+            );
+
+      httpStatus = 200;
+      degradedOutcome = response.degraded;
+      ttsPlayed = _autoPlayVoice && response.audioUrl.isNotEmpty;
+      final status = response.degraded
+          ? ChatMessageStatus.degraded
+          : ChatMessageStatus.sent;
+      _updateMessage(
+        message.clientMessageId,
+        (item) => item.copyWith(status: status, requestId: response.requestId),
+      );
+      await _removeFromOutbox(message.clientMessageId);
+      await _appendAssistantResponse(response);
     } catch (error) {
+      if (ApiClient.isAuthFailure(error)) {
+        if (mounted) {
+          setState(() {
+            _needsActivation = true;
+            _statusText = '激活已失效，请重新激活';
+          });
+        }
+        return;
+      }
+      if (ApiClient.isNetworkFailure(error)) {
+        httpStatus = -1;
+        await _markQueued(message);
+        return;
+      }
+      httpStatus = -2;
+      _updateMessage(
+        message.clientMessageId,
+        (item) => item.copyWith(
+          status: ChatMessageStatus.failed,
+          errorText: ChatErrorText.friendly(error),
+        ),
+      );
       await _appendSystemError(
         ChatErrorText.friendly(error),
         statusText: '发送失败',
       );
     } finally {
+      stopwatch.stop();
+      _recordTelemetry(
+        message,
+        status: httpStatus,
+        degraded: degradedOutcome,
+        latencyMs: stopwatch.elapsedMilliseconds,
+        ttsPlayed: ttsPlayed,
+        voice: voice,
+      );
       if (mounted) {
-        setState(() {
-          _sending = false;
-        });
+        if (manageSending) {
+          setState(() {
+            _sending = false;
+          });
+        }
         _scrollToBottomLater();
       }
     }
   }
 
-  Future<void> _sendTextToChat({
-    required String text,
-    required UserIdentity identity,
-  }) async {
-    await _audioPlaybackService.stop();
-    final response = await _apiClient.sendChat(
-      userId: identity.userId,
-      username: identity.username,
-      text: text,
-    );
-    await _appendAssistantResponse(response);
+  Future<void> _sendFeedback(
+    ChatMessage message,
+    int rating,
+    List<String> tags,
+  ) async {
+    final key = message.requestId.isNotEmpty
+        ? message.requestId
+        : message.clientMessageId;
+    if (key.isEmpty) {
+      return;
+    }
+    await _feedbackStore.set(key, rating, tags);
+    final updated = await _feedbackStore.load();
+    if (mounted) {
+      setState(() {
+        _feedback = updated;
+        _statusText = rating > 0 ? '已记录：有帮助' : '已记录：待改进';
+      });
+    }
+    final telemetry = _telemetry;
+    if (telemetry != null) {
+      unawaited(
+        telemetry
+            .recordFeedback(messageId: key, rating: rating, tags: tags)
+            .then((_) => telemetry.flush()),
+      );
+    }
   }
 
-  Future<void> _sendImageToChat({
-    required String text,
-    required UserIdentity identity,
-    required String imagePath,
-  }) async {
-    await _audioPlaybackService.stop();
-    final response = await _apiClient.sendMultimodalChat(
-      userId: identity.userId,
-      username: identity.username,
-      text: text,
-      imagePath: imagePath,
+  void _recordTelemetry(
+    ChatMessage message, {
+    required int status,
+    required bool degraded,
+    required int latencyMs,
+    required bool ttsPlayed,
+    required bool voice,
+  }) {
+    final telemetry = _telemetry;
+    if (telemetry == null) {
+      return;
+    }
+    unawaited(
+      telemetry
+          .recordTurn(
+            clientMessageId: message.clientMessageId,
+            latencyMs: latencyMs,
+            status: status,
+            degraded: degraded,
+            textLen: message.text.length,
+            hasImage: message.imagePath.isNotEmpty,
+            ttsPlayed: ttsPlayed,
+            attempts: message.attempts,
+            voice: voice,
+          )
+          .then((_) => telemetry.flush()),
     );
-    await _appendAssistantResponse(response);
+  }
+
+  void _updateMessage(
+    String clientMessageId,
+    ChatMessage Function(ChatMessage message) update,
+  ) {
+    if (clientMessageId.isEmpty) {
+      return;
+    }
+    var changed = false;
+    final next = _messages.map((message) {
+      if (message.clientMessageId != clientMessageId) {
+        return message;
+      }
+      changed = true;
+      return update(message);
+    }).toList();
+    if (changed && mounted) {
+      setState(() {
+        _messages = next;
+      });
+    }
+  }
+
+  Future<void> _markQueued(ChatMessage message) async {
+    final attempts = message.attempts + 1;
+    final delay = outboxBackoff(attempts);
+    _updateMessage(
+      message.clientMessageId,
+      (item) => item.copyWith(
+        status: ChatMessageStatus.queued,
+        attempts: attempts,
+        errorText: '网络不稳定',
+      ),
+    );
+    _outbox = [
+      ..._outbox.where(
+        (entry) => entry.clientMessageId != message.clientMessageId,
+      ),
+      OutboxEntry(
+        clientMessageId: message.clientMessageId,
+        text: message.text,
+        imagePath: message.imagePath,
+        createdAt: message.createdAt,
+        attempts: attempts,
+        nextAttemptAt: DateTime.now().add(delay),
+      ),
+    ];
+    await _outboxStore.save(_outbox);
+    await _historyStore.save(_messages);
+    if (mounted) {
+      setState(() {
+        _online = false;
+        _statusText = '网络不稳定，已排队（${delay.inSeconds}s 后自动重试）';
+      });
+    }
+    _scheduleOutboxFlush();
+  }
+
+  Future<void> _removeFromOutbox(String clientMessageId) async {
+    if (clientMessageId.isEmpty) {
+      return;
+    }
+    if (!_outbox.any((entry) => entry.clientMessageId == clientMessageId)) {
+      return;
+    }
+    _outbox = _outbox
+        .where((entry) => entry.clientMessageId != clientMessageId)
+        .toList();
+    await _outboxStore.save(_outbox);
+  }
+
+  Future<void> _restoreOutbox() async {
+    _outbox = await _outboxStore.load();
+    if (_outbox.isEmpty) {
+      return;
+    }
+    final next = [..._messages];
+    for (final entry in _outbox) {
+      final exists = next.any(
+        (message) => message.clientMessageId == entry.clientMessageId,
+      );
+      if (!exists) {
+        next.add(
+          ChatMessage.user(
+            text: entry.text,
+            imagePath: entry.imagePath,
+            clientMessageId: entry.clientMessageId,
+            status: ChatMessageStatus.queued,
+            attempts: entry.attempts,
+          ),
+        );
+      }
+    }
+    if (mounted) {
+      setState(() {
+        _messages = next;
+        _statusText = '有 ${_outbox.length} 条消息待重发';
+      });
+    }
+    _scheduleOutboxFlush();
+  }
+
+  Future<void> _flushOutbox() async {
+    final identity = _identity;
+    if (_flushingOutbox || identity == null || !_online) {
+      return;
+    }
+    final due = _outbox.where((entry) => entry.isDue).toList();
+    if (due.isEmpty) {
+      _scheduleOutboxFlush();
+      return;
+    }
+
+    _flushingOutbox = true;
+    try {
+      for (final entry in due) {
+        final existing = _messages
+            .where(
+              (message) => message.clientMessageId == entry.clientMessageId,
+            )
+            .toList();
+        ChatMessage message;
+        if (existing.isEmpty) {
+          message = ChatMessage.user(
+            text: entry.text,
+            imagePath: entry.imagePath,
+            clientMessageId: entry.clientMessageId,
+            status: ChatMessageStatus.sending,
+            attempts: entry.attempts,
+          );
+          if (mounted) {
+            setState(() {
+              _messages = [..._messages, message];
+            });
+          }
+        } else {
+          message = existing.first.copyWith(status: ChatMessageStatus.sending);
+          _updateMessage(entry.clientMessageId, (_) => message);
+        }
+        await _deliverMessage(message, identity, manageSending: false);
+        if (_outbox.any(
+          (item) => item.clientMessageId == entry.clientMessageId,
+        )) {
+          break;
+        }
+      }
+    } finally {
+      _flushingOutbox = false;
+      _scheduleOutboxFlush();
+    }
+  }
+
+  void _scheduleOutboxFlush() {
+    _outboxTimer?.cancel();
+    if (_outbox.isEmpty) {
+      return;
+    }
+    _outboxTimer = Timer(const Duration(seconds: 15), () {
+      _flushOutbox();
+    });
+  }
+
+  Future<void> _retryMessage(ChatMessage message) async {
+    final identity = _identity;
+    if (identity == null || _sending) {
+      return;
+    }
+    _updateMessage(
+      message.clientMessageId,
+      (item) => item.copyWith(status: ChatMessageStatus.sending, errorText: ''),
+    );
+    if (mounted) {
+      setState(() {
+        _sending = true;
+        _statusText = '正在重试...';
+      });
+    }
+    await _removeFromOutbox(message.clientMessageId);
+    await _deliverMessage(message, identity);
+  }
+
+  String _newClientMessageId() {
+    return _uuid.v4();
+  }
+
+  Future<void> _initConnectivity() async {
+    try {
+      final connectivity = Connectivity();
+      final results = await connectivity.checkConnectivity();
+      _online = !results.contains(ConnectivityResult.none);
+      _connectivitySub = connectivity.onConnectivityChanged.listen((changes) {
+        final online = !changes.contains(ConnectivityResult.none);
+        if (online == _online) {
+          return;
+        }
+        _online = online;
+        if (mounted) {
+          setState(() {
+            _statusText = online ? '网络已恢复' : '网络已断开，消息会先排队';
+          });
+        }
+        if (online) {
+          _flushOutbox();
+        }
+      });
+    } catch (_) {
+      _online = true;
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _flushOutbox();
+    }
   }
 
   Future<void> _appendAssistantResponse(ChatResponse response) async {
@@ -319,8 +830,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
       motion: response.motion,
       expression: response.expression,
       audioUrl: response.audioUrl,
-      live2d: response.live2d,
       requestId: response.requestId,
+      status: response.degraded
+          ? ChatMessageStatus.degraded
+          : ChatMessageStatus.sent,
+      retryAfterSeconds: response.retryAfterSeconds,
       memoryStatus: MemoryWriteStatus.fromMetadata(response.metadata),
     );
     final nextMessages = [..._messages, assistantMessage];
@@ -331,13 +845,14 @@ class _ChatHomePageState extends State<ChatHomePage> {
 
     setState(() {
       _messages = nextMessages;
-      _currentLive2D = response.live2d;
-      _statusText = _memoryStatusText(response.metadata);
+      _statusText = response.degraded
+          ? '服务繁忙，已给出降级回复'
+          : _memoryStatusText(response.metadata);
     });
 
     await _historyStore.save(nextMessages);
     if (_autoPlayVoice) {
-      await _playResponseAudio(response.audioUrl, response.live2d);
+      await _playResponseAudio(response.audioUrl);
     }
   }
 
@@ -427,6 +942,25 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
   }
 
+  Future<void> _sendTextToChat({
+    required String text,
+    required UserIdentity identity,
+  }) async {
+    await _audioPlaybackService.stop();
+    final message = ChatMessage.user(
+      text: text,
+      clientMessageId: _newClientMessageId(),
+      status: ChatMessageStatus.sending,
+    );
+    if (mounted) {
+      setState(() {
+        _messages = [..._messages, message];
+      });
+    }
+    await _historyStore.save(_messages);
+    await _deliverMessage(message, identity, voice: true);
+  }
+
   Future<void> _stopRecordingAndSend() async {
     final identity = _identity;
     if (identity == null) {
@@ -455,7 +989,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
       final userMessage = ChatMessage.user(text: '[语音] $transcript');
       setState(() {
         _messages = [..._messages, userMessage];
-        _chatPanelExpanded = true;
         _statusText = '语音识别完成，正在回复...';
       });
       _scrollToBottomLater();
@@ -486,39 +1019,31 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
     setState(() {
       _messages = nextMessages;
-      _chatPanelExpanded = true;
       _statusText = statusText;
     });
     await _historyStore.save(nextMessages);
   }
 
-  Future<void> _playResponseAudio(
-    String responseAudioUrl,
-    Live2DPayload? payload,
-  ) async {
-    final live2dAudioUrl = payload?.character.mouth.audioUrl ?? '';
-    final audioUrl = responseAudioUrl.isNotEmpty
-        ? responseAudioUrl
-        : live2dAudioUrl;
+  Future<void> _playResponseAudio(String responseAudioUrl) async {
+    final audioUrl = _apiClient.authorizedAudioUrl(responseAudioUrl);
     if (audioUrl.isEmpty) {
       return;
     }
     try {
       await _audioPlaybackService.playUrl(audioUrl);
-    } catch (error) {
+    } catch (_) {
       if (!mounted) {
         return;
       }
-      setState(() {
-        _statusText = ChatErrorText.friendly(error);
-      });
+      // 自动播放失败只提示，不覆盖聊天状态，避免看起来像回复失败。
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('语音播放失败，可点“播放语音”重试')));
     }
   }
 
   Future<void> _playMessageAudio(ChatMessage message) async {
-    final audioUrl = message.audioUrl.isNotEmpty
-        ? message.audioUrl
-        : message.live2d?.character.mouth.audioUrl ?? '';
+    final audioUrl = _apiClient.authorizedAudioUrl(message.audioUrl);
     if (audioUrl.isEmpty) {
       setState(() {
         _statusText = '这条消息没有可播放的语音';
@@ -538,7 +1063,7 @@ class _ChatHomePageState extends State<ChatHomePage> {
         return;
       }
       setState(() {
-        _statusText = ChatErrorText.friendly(error);
+        _statusText = '语音播放失败，可稍后重试';
       });
     }
   }
@@ -570,9 +1095,11 @@ class _ChatHomePageState extends State<ChatHomePage> {
       _apiConfig = nextConfig;
       _apiClient = ApiClient(config: nextConfig);
       _apiClientReady = true;
+      _openingRequested = false;
       _statusText = '服务器已更新';
     });
     await _checkHealth();
+    await _openPresenceSession(force: true);
   }
 
   Future<void> _setAutoPlayVoice(bool value) async {
@@ -628,11 +1155,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
             audioPlaybackService: _audioPlaybackService,
             recorderService: _recorderService,
             onAssistantResponse: _appendVoiceCallResponse,
-            onLive2DChanged: (payload) {
-              setState(() {
-                _currentLive2D = payload;
-              });
-            },
             onSpeakingChanged: _handleSpeakingChanged,
           );
         },
@@ -652,7 +1174,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
         motion: response.chat.motion,
         expression: response.chat.expression,
         audioUrl: response.chat.audioUrl,
-        live2d: response.chat.live2d,
         requestId: response.requestId,
         memoryStatus: MemoryWriteStatus.fromMetadata(response.chat.metadata),
       ),
@@ -663,7 +1184,6 @@ class _ChatHomePageState extends State<ChatHomePage> {
     }
     setState(() {
       _messages = messages;
-      _currentLive2D = response.chat.live2d;
       _statusText = '通话回复完成';
     });
     await _historyStore.save(messages);
@@ -728,16 +1248,31 @@ class _ChatHomePageState extends State<ChatHomePage> {
   Future<void> _clearHistory() async {
     await _audioPlaybackService.stop();
     await _historyStore.clear();
+    _outbox = [];
+    await _outboxStore.save(_outbox);
     if (!mounted) {
       return;
     }
     setState(() {
       _messages = [];
-      _currentLive2D = null;
+
       _selectedImagePath = '';
-      _chatPanelExpanded = false;
       _statusText = '聊天历史已清空';
     });
+  }
+
+  String _headerStatusText() {
+    if (!_online) {
+      return '离线';
+    }
+    if (_backendStatus.state == BackendConnectionState.checking) {
+      return '连接中...';
+    }
+    if (_backendStatus.state == BackendConnectionState.disconnected) {
+      return '后端未连接';
+    }
+    const quiet = {'', '准备好了', '回复完成', '临时聊天'};
+    return quiet.contains(_statusText) ? '在线' : _statusText;
   }
 
   @override
@@ -745,126 +1280,67 @@ class _ChatHomePageState extends State<ChatHomePage> {
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
+    if (_needsActivation) {
+      return ActivationPage(
+        onActivated: _handleActivated,
+        errorText: _statusText == '需要激活' ? '' : _statusText,
+      );
+    }
     if (_identity == null) {
-      return AuthPage(onLogin: _login, onRegister: _register);
+      if (_authUiEnabled) {
+        return AuthPage(onLogin: _login, onRegister: _register);
+      }
+      return ActivationPage(onActivated: _handleActivated);
     }
 
-    final keyboardBottom = MediaQuery.viewInsetsOf(context).bottom;
-    final keyboardOpen = keyboardBottom > 0;
-    final stageOffset = keyboardOpen ? -keyboardBottom * 0.42 : 0.0;
-    final stageScale = keyboardOpen ? 0.82 : 1.0;
-
     return Scaffold(
-      resizeToAvoidBottomInset: false,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          const _StageBackground(),
-          AnimatedSlide(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOut,
-            offset: Offset(0, stageOffset / MediaQuery.sizeOf(context).height),
-            child: AnimatedScale(
-              duration: const Duration(milliseconds: 220),
-              curve: Curves.easeOut,
-              scale: stageScale,
-              alignment: Alignment.topCenter,
-              child: Live2DStageView(
-                statusText: _statusText,
-                payload: _currentLive2D,
-                expand: true,
-                onBridgeReady: (bridge) {
-                  _live2dBridge = bridge;
-                },
+      backgroundColor: const Color(0xFFF2F3F5),
+      body: SafeArea(
+        child: Column(
+          children: [
+            _ChatHeader(
+              title: 'AIAgent',
+              statusText: _headerStatusText(),
+              online: _online,
+              speaking: _speaking,
+              onOpenVoiceCall: _openVoiceCallPage,
+              onOpenSettings: _openSettingsPage,
+              onCheckHealth: () => _checkHealth(),
+              onStopAudio: _audioPlaybackService.stop,
+            ),
+            Expanded(
+              child: _MessageList(
+                messages: _messages,
+                controller: _scrollController,
+                feedback: _feedback,
+                onPlayAudio: _playMessageAudio,
+                onRetry: _retryMessage,
+                onFeedback: _sendFeedback,
               ),
             ),
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                _TopOverlayBar(
-                  username: _identity?.username ?? 'AIAgent',
-                  status: _backendStatus,
-                  speaking: _speaking,
-                  onOpenVoiceCall: _openVoiceCallPage,
-                  onOpenSettings: _openSettingsPage,
-                  onCheckHealth: () => _checkHealth(),
-                  onStopAudio: _audioPlaybackService.stop,
-                ),
-                const Spacer(),
-                _ChatPanel(
-                  expanded: _chatPanelExpanded,
-                  statusText: _statusText,
-                  messages: _messages,
-                  controller: _scrollController,
-                  onToggleExpanded: () {
-                    setState(() {
-                      _chatPanelExpanded = !_chatPanelExpanded;
-                    });
-                    _scrollToBottomLater();
-                  },
-                  onPlayAudio: _playMessageAudio,
-                ),
-                _InputBar(
-                  controller: _textController,
-                  sending: _sending,
-                  recording: _recording,
-                  selectedImagePath: _selectedImagePath,
-                  onSend: _sendMessage,
-                  onRecord: _toggleRecording,
-                  onPickImage: _pickImageFromGallery,
-                  onTakePhoto: _takePhoto,
-                  onClearImage: _clearSelectedImage,
-                ),
-              ],
+            _InputBar(
+              controller: _textController,
+              sending: _sending,
+              recording: _recording,
+              selectedImagePath: _selectedImagePath,
+              onSend: _sendMessage,
+              onRecord: _toggleRecording,
+              onPickImage: _pickImageFromGallery,
+              onTakePhoto: _takePhoto,
+              onClearImage: _clearSelectedImage,
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
-class _StageBackground extends StatelessWidget {
-  const _StageBackground();
-
-  static const String _bedroomImageUrl =
-      'https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?auto=format&fit=crop&w=1200&q=80';
-
-  @override
-  Widget build(BuildContext context) {
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        Image.network(
-          _bedroomImageUrl,
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            return const DecoratedBox(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0xFFE9F1ED),
-                    Color(0xFFFFF6EF),
-                    Color(0xFFF3C8BD),
-                  ],
-                ),
-              ),
-            );
-          },
-        ),
-        ColoredBox(color: Colors.white.withValues(alpha: 0.30)),
-      ],
-    );
-  }
-}
-
-class _TopOverlayBar extends StatelessWidget {
-  const _TopOverlayBar({
-    required this.username,
-    required this.status,
+class _ChatHeader extends StatelessWidget {
+  const _ChatHeader({
+    required this.title,
+    required this.statusText,
+    required this.online,
     required this.speaking,
     required this.onOpenVoiceCall,
     required this.onOpenSettings,
@@ -872,8 +1348,9 @@ class _TopOverlayBar extends StatelessWidget {
     required this.onStopAudio,
   });
 
-  final String username;
-  final BackendStatus status;
+  final String title;
+  final String statusText;
+  final bool online;
   final bool speaking;
   final VoidCallback onOpenVoiceCall;
   final VoidCallback onOpenSettings;
@@ -882,74 +1359,85 @@ class _TopOverlayBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final connected = status.state == BackendConnectionState.connected;
-    final checking = status.state == BackendConnectionState.checking;
-
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(14, 8, 14, 0),
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE6E6E6))),
+      ),
       child: Row(
         children: [
+          const _ChatAvatar(label: '绫', isUser: false, size: 36),
+          const SizedBox(width: 10),
           Expanded(
-            child: _TranslucentPanel(
-              alpha: 0.34,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF222222),
+                  ),
                 ),
-                child: Row(
+                const SizedBox(height: 2),
+                Row(
                   children: [
-                    Icon(
-                      connected
-                          ? Icons.cloud_done_outlined
-                          : checking
-                          ? Icons.sync
-                          : Icons.cloud_off_outlined,
-                      size: 18,
-                      color: connected
-                          ? const Color(0xFF23745B)
-                          : Colors.black87,
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        color: online
+                            ? const Color(0xFF23A26D)
+                            : const Color(0xFFAAAAAA),
+                        shape: BoxShape.circle,
+                      ),
                     ),
-                    const SizedBox(width: 8),
-                    Expanded(
+                    const SizedBox(width: 4),
+                    Flexible(
                       child: Text(
-                        username,
+                        statusText,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          color: Color(0xFF2B2B2B),
+                          fontSize: 12,
+                          color: Color(0xFF8A8A8A),
                         ),
                       ),
                     ),
                   ],
                 ),
-              ),
+              ],
             ),
           ),
-          const SizedBox(width: 8),
-          _GlassIconButton(
-            tooltip: '检查连接',
-            onPressed: onCheckHealth,
-            icon: Icons.cloud_sync_outlined,
-          ),
-          const SizedBox(width: 8),
-          _GlassIconButton(
-            tooltip: '实时语音通话',
+          IconButton(
+            tooltip: '语音通话',
             onPressed: onOpenVoiceCall,
-            icon: Icons.call_outlined,
+            icon: const Icon(Icons.call_outlined, color: Color(0xFF444444)),
           ),
-          const SizedBox(width: 8),
-          _GlassIconButton(
-            tooltip: speaking ? '停止语音' : '暂无语音播放',
-            onPressed: speaking ? onStopAudio : null,
-            icon: speaking ? Icons.volume_up : Icons.volume_off_outlined,
-          ),
-          const SizedBox(width: 8),
-          _GlassIconButton(
-            tooltip: '设置',
-            onPressed: onOpenSettings,
-            icon: Icons.settings_outlined,
+          PopupMenuButton<String>(
+            tooltip: '更多',
+            icon: const Icon(Icons.more_horiz, color: Color(0xFF444444)),
+            onSelected: (value) {
+              if (value == 'health') {
+                onCheckHealth();
+              } else if (value == 'stop') {
+                onStopAudio();
+              } else if (value == 'settings') {
+                onOpenSettings();
+              }
+            },
+            itemBuilder: (context) => <PopupMenuEntry<String>>[
+              const PopupMenuItem<String>(value: 'health', child: Text('检查连接')),
+              if (speaking)
+                const PopupMenuItem<String>(value: 'stop', child: Text('停止语音')),
+              const PopupMenuItem<String>(value: 'settings', child: Text('设置')),
+            ],
           ),
         ],
       ),
@@ -957,210 +1445,431 @@ class _TopOverlayBar extends StatelessWidget {
   }
 }
 
-class _GlassIconButton extends StatelessWidget {
-  const _GlassIconButton({
-    required this.tooltip,
-    required this.onPressed,
-    required this.icon,
+class _ChatAvatar extends StatelessWidget {
+  const _ChatAvatar({
+    required this.label,
+    required this.isUser,
+    this.size = 36,
   });
 
-  final String tooltip;
-  final VoidCallback? onPressed;
-  final IconData icon;
+  final String label;
+  final bool isUser;
+  final double size;
 
   @override
   Widget build(BuildContext context) {
-    return _TranslucentPanel(
-      alpha: onPressed == null ? 0.12 : 0.18,
-      child: IconButton(
-        tooltip: tooltip,
-        onPressed: onPressed,
-        icon: Icon(icon),
-        color: const Color(0xFF2B2B2B),
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: isUser ? const Color(0xFF5B8CFF) : null,
+        gradient: isUser
+            ? null
+            : const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFFFF9A8F), Color(0xFFC74444)],
+              ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: size * 0.40,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }
 }
 
-class _ChatPanel extends StatelessWidget {
-  const _ChatPanel({
-    required this.expanded,
-    required this.statusText,
+class _MessageList extends StatelessWidget {
+  const _MessageList({
     required this.messages,
     required this.controller,
-    required this.onToggleExpanded,
+    required this.feedback,
     required this.onPlayAudio,
+    required this.onRetry,
+    required this.onFeedback,
   });
 
-  final bool expanded;
-  final String statusText;
   final List<ChatMessage> messages;
   final ScrollController controller;
-  final VoidCallback onToggleExpanded;
+  final Map<String, Map<String, dynamic>> feedback;
   final ValueChanged<ChatMessage> onPlayAudio;
+  final ValueChanged<ChatMessage> onRetry;
+  final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
 
   @override
   Widget build(BuildContext context) {
-    final latest = messages.isEmpty ? '开始聊天吧' : messages.last.text;
-    final panelHeight = expanded
-        ? (MediaQuery.sizeOf(context).height * 0.34).clamp(180.0, 310.0)
-        : 64.0;
+    if (messages.isEmpty) {
+      return const _EmptyChatView();
+    }
+    return ListView.builder(
+      controller: controller,
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
+      itemCount: messages.length,
+      itemBuilder: (context, index) {
+        final message = messages[index];
+        final previous = index > 0 ? messages[index - 1] : null;
+        final showTime =
+            previous == null ||
+            message.createdAt.difference(previous.createdAt).inMinutes.abs() >=
+                5;
+        return _MessageBubble(
+          message: message,
+          showTime: showTime,
+          feedback: feedback,
+          onPlayAudio: onPlayAudio,
+          onRetry: onRetry,
+          onFeedback: onFeedback,
+        );
+      },
+    );
+  }
+}
 
-    return AnimatedContainer(
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOut,
-      height: panelHeight,
-      margin: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-      child: _TranslucentPanel(
-        alpha: 0.30,
-        child: Column(
-          children: [
-            InkWell(
-              onTap: onToggleExpanded,
-              borderRadius: BorderRadius.circular(8),
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(12, 8, 8, 8),
-                child: Row(
-                  children: [
-                    Icon(
-                      expanded
-                          ? Icons.keyboard_arrow_down
-                          : Icons.keyboard_arrow_up,
-                      color: Colors.black87,
-                    ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        expanded ? statusText : latest,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFF2B2B2B),
-                        ),
-                      ),
-                    ),
-                    Text(
-                      '${messages.length}',
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w800,
-                        color: Colors.black54,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+class _EmptyChatView extends StatelessWidget {
+  const _EmptyChatView();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const _ChatAvatar(label: '绫', isUser: false, size: 64),
+          const SizedBox(height: 16),
+          const Text(
+            '开始和 AIAgent 聊天吧',
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF333333),
             ),
-            if (expanded)
-              Expanded(
-                child: messages.isEmpty
-                    ? const Center(child: Text('还没有消息'))
-                    : ListView.builder(
-                        controller: controller,
-                        padding: const EdgeInsets.fromLTRB(12, 2, 12, 10),
-                        itemCount: messages.length,
-                        itemBuilder: (context, index) {
-                          return _MessageBubble(
-                            message: messages[index],
-                            onPlayAudio: onPlayAudio,
-                          );
-                        },
-                      ),
-              ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '发送消息、图片或语音，阿绫会在这里回复你',
+            style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+          ),
+        ],
       ),
     );
   }
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message, required this.onPlayAudio});
+  const _MessageBubble({
+    required this.message,
+    required this.showTime,
+    required this.feedback,
+    required this.onPlayAudio,
+    required this.onRetry,
+    required this.onFeedback,
+  });
 
   final ChatMessage message;
+  final bool showTime;
+  final Map<String, Map<String, dynamic>> feedback;
   final ValueChanged<ChatMessage> onPlayAudio;
+  final ValueChanged<ChatMessage> onRetry;
+  final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
 
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == ChatRole.user;
     final isSystem = message.role == ChatRole.system;
-    final hasAudio =
-        message.audioUrl.isNotEmpty ||
-        (message.live2d?.character.mouth.audioUrl ?? '').isNotEmpty;
-    final imagePath = message.imagePath;
-
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onLongPress: () {
-          MessageActions.show(
-            context: context,
-            message: message,
-            onPlayAudio: onPlayAudio,
-          );
-        },
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: 320),
-          margin: const EdgeInsets.symmetric(vertical: 5),
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: isUser ? 0.42 : 0.36),
-            borderRadius: BorderRadius.circular(8),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.30)),
+    if (isSystem) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Center(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              message.text,
+              style: const TextStyle(fontSize: 12, color: Color(0xFF777777)),
+            ),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                isUser
-                    ? '你'
-                    : isSystem
-                    ? '系统'
-                    : 'AIAgent',
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w800,
+        ),
+      );
+    }
+
+    final hasAudio = message.audioUrl.isNotEmpty;
+    final needsRetry =
+        message.role == ChatRole.user &&
+        (message.status == ChatMessageStatus.queued ||
+            message.status == ChatMessageStatus.failed);
+    final imagePath = message.imagePath;
+    final feedbackKey = message.requestId.isNotEmpty
+        ? message.requestId
+        : message.clientMessageId;
+    final feedbackEntry =
+        message.role == ChatRole.assistant && feedbackKey.isNotEmpty
+        ? feedback[feedbackKey]
+        : null;
+    final currentRating = feedbackEntry?['rating'];
+
+    final bubble = GestureDetector(
+      onTap: needsRetry ? () => onRetry(message) : null,
+      onLongPress: () {
+        MessageActions.show(
+          context: context,
+          message: message,
+          onPlayAudio: onPlayAudio,
+          onRetry: onRetry,
+        );
+      },
+      child: Container(
+        constraints: BoxConstraints(
+          maxWidth: MediaQuery.sizeOf(context).width * 0.68,
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+        decoration: BoxDecoration(
+          color: isUser ? const Color(0xFFC74444) : Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(isUser ? 14 : 4),
+            topRight: Radius.circular(isUser ? 4 : 14),
+            bottomLeft: const Radius.circular(14),
+            bottomRight: const Radius.circular(14),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 6,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (imagePath.isNotEmpty) ...[
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: Image.file(
+                  File(imagePath),
+                  width: 220,
+                  height: 160,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      width: 220,
+                      height: 80,
+                      alignment: Alignment.center,
+                      color: const Color(0xFFF2F2F2),
+                      child: const Text('图片无法显示'),
+                    );
+                  },
                 ),
               ),
-              if (imagePath.isNotEmpty) ...[
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.file(
-                    File(imagePath),
-                    width: 280,
-                    height: 180,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const SizedBox(
-                        width: 280,
-                        height: 80,
-                        child: Center(child: Text('图片无法显示')),
-                      );
-                    },
-                  ),
-                ),
-              ],
-              const SizedBox(height: 6),
-              Text(message.text),
-              if (message.role == ChatRole.assistant &&
-                  message.memoryStatus.visible) ...[
-                const SizedBox(height: 8),
-                MemoryStatusChip(status: message.memoryStatus),
-              ],
-              if (hasAudio) ...[
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: () => onPlayAudio(message),
-                  icon: const Icon(Icons.volume_up_outlined, size: 16),
-                  label: const Text('播放语音'),
-                ),
-              ],
+              if (message.text.trim().isNotEmpty) const SizedBox(height: 6),
             ],
-          ),
+            if (message.text.trim().isNotEmpty)
+              Text(
+                message.text,
+                style: TextStyle(
+                  fontSize: 15,
+                  height: 1.42,
+                  color: isUser ? Colors.white : const Color(0xFF222222),
+                ),
+              ),
+          ],
         ),
       ),
     );
+
+    final extras = <Widget>[
+      if (needsRetry) ...[
+        const SizedBox(height: 4),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              message.status == ChatMessageStatus.failed
+                  ? Icons.error_outline
+                  : Icons.schedule,
+              size: 13,
+              color: const Color(0xFF8A6D3B),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              message.status == ChatMessageStatus.failed
+                  ? '发送失败，点击重试'
+                  : '待发送，点击重试',
+              style: const TextStyle(fontSize: 11, color: Color(0xFF8A6D3B)),
+            ),
+          ],
+        ),
+      ],
+      if (message.role == ChatRole.assistant && message.isDegraded) ...[
+        const SizedBox(height: 4),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFE0B2),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: const Text(
+            '服务繁忙 · 降级回复',
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+      if (message.role == ChatRole.assistant &&
+          message.memoryStatus.visible) ...[
+        const SizedBox(height: 4),
+        MemoryStatusChip(status: message.memoryStatus),
+      ],
+      if (hasAudio) ...[
+        const SizedBox(height: 2),
+        TextButton.icon(
+          onPressed: () => onPlayAudio(message),
+          style: TextButton.styleFrom(
+            foregroundColor: const Color(0xFF666666),
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            minimumSize: const Size(0, 30),
+            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+          icon: const Icon(Icons.volume_up_outlined, size: 16),
+          label: const Text('播放语音', style: TextStyle(fontSize: 12)),
+        ),
+      ],
+      if (message.role == ChatRole.assistant && feedbackKey.isNotEmpty) ...[
+        const SizedBox(height: 2),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+              iconSize: 16,
+              color: currentRating == 1
+                  ? const Color(0xFF23A26D)
+                  : Colors.black38,
+              icon: Icon(
+                currentRating == 1 ? Icons.thumb_up : Icons.thumb_up_outlined,
+              ),
+              onPressed: () => onFeedback(message, 1, const []),
+            ),
+            IconButton(
+              visualDensity: VisualDensity.compact,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
+              iconSize: 16,
+              color: currentRating == -1
+                  ? const Color(0xFFB3261E)
+                  : Colors.black38,
+              icon: Icon(
+                currentRating == -1
+                    ? Icons.thumb_down
+                    : Icons.thumb_down_outlined,
+              ),
+              onPressed: () => _showFeedbackTags(context),
+            ),
+            if (currentRating == -1 && feedbackEntry?['tags'] is List)
+              Text(
+                (feedbackEntry!['tags'] as List).join(' / '),
+                style: const TextStyle(fontSize: 11, color: Colors.black38),
+              ),
+          ],
+        ),
+      ],
+    ];
+
+    return Padding(
+      padding: EdgeInsets.only(top: showTime ? 10 : 4, bottom: 4),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (showTime) ...[
+            Center(
+              child: Text(
+                _formatTime(message.createdAt),
+                style: const TextStyle(fontSize: 11, color: Color(0xFFAAAAAA)),
+              ),
+            ),
+            const SizedBox(height: 6),
+          ],
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisAlignment: isUser
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.start,
+            children: [
+              if (!isUser) ...[
+                const _ChatAvatar(label: '绫', isUser: false, size: 36),
+                const SizedBox(width: 8),
+              ],
+              Flexible(
+                child: Column(
+                  crossAxisAlignment: isUser
+                      ? CrossAxisAlignment.end
+                      : CrossAxisAlignment.start,
+                  children: [bubble, ...extras],
+                ),
+              ),
+              if (isUser) ...[
+                const SizedBox(width: 8),
+                const _ChatAvatar(label: '我', isUser: true, size: 36),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatTime(DateTime value) {
+    final now = DateTime.now();
+    final hm =
+        '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
+    if (now.year == value.year &&
+        now.month == value.month &&
+        now.day == value.day) {
+      return hm;
+    }
+    return '${value.month}/${value.day} $hm';
+  }
+
+  Future<void> _showFeedbackTags(BuildContext context) async {
+    const tags = ['答非所问', '太慢', '太短', '语气不对', '其他'];
+    final selected = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text(
+                  '哪里不满意？',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              for (final tag in tags)
+                ListTile(
+                  title: Text(tag),
+                  onTap: () => Navigator.of(sheetContext).pop(tag),
+                ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (selected != null) {
+      await onFeedback(message, -1, [selected]);
+    }
   }
 }
 
@@ -1189,16 +1898,15 @@ class _InputBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: EdgeInsets.only(
-        left: 12,
-        right: 12,
-        bottom: 12 + MediaQuery.viewInsetsOf(context).bottom,
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(top: BorderSide(color: Color(0xFFE6E6E6))),
       ),
-      child: _TranslucentPanel(
-        alpha: 0.34,
+      child: SafeArea(
+        top: false,
         child: Padding(
-          padding: const EdgeInsets.all(8),
+          padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -1210,25 +1918,30 @@ class _InputBar extends StatelessWidget {
                 const SizedBox(height: 8),
               ],
               Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  _InputIconButton(
-                    onPressed: sending || recording ? null : onPickImage,
-                    icon: Icons.photo_outlined,
-                    tooltip: '选择图片',
+                  PopupMenuButton<String>(
+                    tooltip: '发送图片',
+                    enabled: !sending && !recording,
+                    icon: const Icon(
+                      Icons.add_circle_outline,
+                      color: Color(0xFF666666),
+                    ),
+                    onSelected: (value) {
+                      if (value == 'gallery') {
+                        onPickImage();
+                      } else if (value == 'camera') {
+                        onTakePhoto();
+                      }
+                    },
+                    itemBuilder: (context) => const <PopupMenuEntry<String>>[
+                      PopupMenuItem<String>(
+                        value: 'gallery',
+                        child: Text('从相册选择'),
+                      ),
+                      PopupMenuItem<String>(value: 'camera', child: Text('拍照')),
+                    ],
                   ),
-                  const SizedBox(width: 6),
-                  _InputIconButton(
-                    onPressed: sending || recording ? null : onTakePhoto,
-                    icon: Icons.photo_camera_outlined,
-                    tooltip: '拍照',
-                  ),
-                  const SizedBox(width: 6),
-                  _InputIconButton(
-                    onPressed: sending && !recording ? null : onRecord,
-                    icon: recording ? Icons.stop : Icons.mic,
-                    tooltip: recording ? '停止录音' : '开始录音',
-                  ),
-                  const SizedBox(width: 8),
                   Expanded(
                     child: TextField(
                       controller: controller,
@@ -1237,36 +1950,53 @@ class _InputBar extends StatelessWidget {
                       enabled: !recording,
                       textInputAction: TextInputAction.send,
                       onSubmitted: (_) => onSend(),
+                      style: const TextStyle(fontSize: 15),
                       decoration: InputDecoration(
                         hintText: recording ? '正在录音...' : '输入消息...',
                         filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.46),
+                        fillColor: const Color(0xFFF2F3F5),
+                        isDense: true,
+                        contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
                         border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
+                          borderRadius: BorderRadius.circular(20),
                           borderSide: BorderSide.none,
                         ),
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 4),
+                  IconButton(
+                    onPressed: sending && !recording ? null : onRecord,
+                    icon: Icon(recording ? Icons.stop_circle : Icons.mic_none),
+                    color: recording
+                        ? const Color(0xFFC74444)
+                        : const Color(0xFF666666),
+                    tooltip: recording ? '停止录音' : '语音输入',
+                  ),
+                  const SizedBox(width: 2),
                   SizedBox(
-                    width: 46,
-                    height: 46,
+                    width: 40,
+                    height: 40,
                     child: FilledButton(
                       onPressed: sending || recording ? null : onSend,
                       style: FilledButton.styleFrom(
                         padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                        shape: const CircleBorder(),
+                        backgroundColor: const Color(0xFFC74444),
                       ),
                       child: sending && !recording
                           ? const SizedBox(
-                              width: 18,
-                              height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
                             )
-                          : const Icon(Icons.send),
+                          : const Icon(Icons.send_rounded, size: 20),
                     ),
                   ),
                 ],
@@ -1274,31 +2004,6 @@ class _InputBar extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-class _InputIconButton extends StatelessWidget {
-  const _InputIconButton({
-    required this.onPressed,
-    required this.icon,
-    required this.tooltip,
-  });
-
-  final VoidCallback? onPressed;
-  final IconData icon;
-  final String tooltip;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 42,
-      height: 42,
-      child: IconButton.filledTonal(
-        onPressed: onPressed,
-        icon: Icon(icon),
-        tooltip: tooltip,
       ),
     );
   }
@@ -1313,21 +2018,20 @@ class _SelectedImagePreview extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 70,
-      padding: const EdgeInsets.all(8),
+      height: 64,
+      padding: const EdgeInsets.all(6),
       decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: 0.36),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.30)),
+        color: const Color(0xFFF7F7F7),
+        borderRadius: BorderRadius.circular(10),
       ),
       child: Row(
         children: [
           ClipRRect(
-            borderRadius: BorderRadius.circular(8),
+            borderRadius: BorderRadius.circular(6),
             child: Image.file(
               File(imagePath),
-              width: 54,
-              height: 54,
+              width: 52,
+              height: 52,
               fit: BoxFit.cover,
             ),
           ),
@@ -1342,32 +2046,6 @@ class _SelectedImagePreview extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _TranslucentPanel extends StatelessWidget {
-  const _TranslucentPanel({required this.child, required this.alpha});
-
-  final Widget child;
-  final double alpha;
-
-  @override
-  Widget build(BuildContext context) {
-    return DecoratedBox(
-      decoration: BoxDecoration(
-        color: Colors.white.withValues(alpha: alpha),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.62)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.06),
-            blurRadius: 18,
-            offset: const Offset(0, 8),
-          ),
-        ],
-      ),
-      child: child,
     );
   }
 }
