@@ -4,7 +4,7 @@ AIAgent 的独立移动端仓库，只负责交互：聊天、语音、图片、
 不包含任何 LLM/TTS/ASR/RAG 配置，也不包含后端代码；服务地址与访问令牌由 **激活码** 一次性带入。
 
 - 仓库：https://github.com/GINKA-Star123/aiagent-frontend
-- 后端仓库：https://github.com/GINKA-Star123/aiagent（前后端分离）
+- 后端仓库：https://github.com/GINKA-Star123/OmniAgent（前后端分离）
 - 当前版本：**1.3.0+1**
 - 包名：`com.aiagent.mobile`
 
