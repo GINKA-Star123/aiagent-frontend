@@ -2972,6 +2972,76 @@ class _EmptyChatViewState extends State<_EmptyChatView> {
   }
 }
 
+class _ExpandableMessageText extends StatefulWidget {
+  const _ExpandableMessageText({
+    required this.text,
+    required this.fontSize,
+    required this.color,
+    required this.accentColor,
+  });
+
+  final String text;
+  final double fontSize;
+  final Color color;
+  final Color accentColor;
+
+  @override
+  State<_ExpandableMessageText> createState() => _ExpandableMessageTextState();
+}
+
+class _ExpandableMessageTextState extends State<_ExpandableMessageText> {
+  bool _expanded = false;
+
+  bool get _isLong {
+    return widget.text.length > 320 || '\n'.allMatches(widget.text).length > 8;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(
+      fontSize: widget.fontSize,
+      height: 1.42,
+      color: widget.color,
+    );
+    if (!_isLong) {
+      return Text(widget.text, style: style);
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          widget.text,
+          style: style,
+          maxLines: _expanded ? null : 10,
+          overflow: _expanded ? TextOverflow.visible : TextOverflow.ellipsis,
+        ),
+        Semantics(
+          button: true,
+          label: _expanded ? '收起长消息' : '展开长消息',
+          child: GestureDetector(
+            onTap: () {
+              setState(() {
+                _expanded = !_expanded;
+              });
+            },
+            child: Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                _expanded ? '收起' : '展开全文',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                  color: widget.accentColor,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _SelectionDot extends StatelessWidget {
   const _SelectionDot({required this.selected});
 
@@ -3407,13 +3477,11 @@ class _MessageBubble extends StatelessWidget {
               if (bodyText.trim().isNotEmpty) const SizedBox(height: 6),
             ],
             if (bodyText.trim().isNotEmpty)
-              Text(
-                bodyText,
-                style: TextStyle(
-                  fontSize: fontSize,
-                  height: 1.42,
-                  color: isUser ? Colors.white : const Color(0xFF222222),
-                ),
+              _ExpandableMessageText(
+                text: bodyText,
+                fontSize: fontSize,
+                color: isUser ? Colors.white : const Color(0xFF222222),
+                accentColor: isUser ? Colors.white70 : const Color(0xFFC74444),
               ),
           ],
         ),
