@@ -1364,6 +1364,37 @@ class _ChatHomePageState extends State<ChatHomePage>
     ).showSnackBar(SnackBar(content: Text('已复制 $count 条消息')));
   }
 
+  Future<void> _favoriteSelectedMessages() async {
+    final identity = _identity;
+    final selected = _selectedMessages;
+    if (identity == null || selected.isEmpty) {
+      return;
+    }
+    final favorites = selected.map((message) {
+      final sender = message.role == ChatRole.user
+          ? '我'
+          : (message.role == ChatRole.system ? '系统' : 'AIAgent');
+      return FavoriteMessage(
+        key: _selectionKeyFor(message),
+        text: message.text,
+        sender: sender,
+        createdAt: message.createdAt,
+        imagePath: message.imagePath,
+      );
+    }).toList();
+    final added = await FavoriteStore.addAll(identity.userId, favorites);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(added > 0 ? '已收藏 $added 条消息' : '所选消息已在收藏夹')),
+    );
+  }
+
   Future<void> _shareSelectedMessages() async {
     final selected = _selectedMessages;
     if (selected.isEmpty) {
@@ -1720,6 +1751,14 @@ class _ChatHomePageState extends State<ChatHomePage>
   void _jumpToBottom() {
     if (!_itemScrollController.isAttached || _messages.isEmpty) {
       return;
+    }
+    if (_unreadMarkerKey.isNotEmpty) {
+      final markerIndex = _messages.indexWhere(
+        (message) => _selectionKeyFor(message) == _unreadMarkerKey,
+      );
+      if (markerIndex >= 0 && markerIndex < _messages.length - 1) {
+        unawaited(_clearUnreadMarker());
+      }
     }
     final typingIndex = _typingItemIndex;
     final index = typingIndex >= 0 ? typingIndex : _messages.length - 1;
@@ -2449,6 +2488,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                       allSelected: _allMessagesSelected,
                       onCancel: _cancelSelection,
                       onToggleSelectAll: _toggleSelectAll,
+                      onFavoriteSelected: _favoriteSelectedMessages,
                       onCopy: _copySelectedMessages,
                       onShare: _shareSelectedMessages,
                       onDelete: _deleteSelectedMessages,
@@ -2986,6 +3026,7 @@ class _SelectionHeader extends StatelessWidget {
     required this.allSelected,
     required this.onCancel,
     required this.onToggleSelectAll,
+    required this.onFavoriteSelected,
     required this.onCopy,
     required this.onShare,
     required this.onDelete,
@@ -2995,6 +3036,7 @@ class _SelectionHeader extends StatelessWidget {
   final bool allSelected;
   final VoidCallback onCancel;
   final VoidCallback onToggleSelectAll;
+  final VoidCallback onFavoriteSelected;
   final VoidCallback onCopy;
   final VoidCallback onShare;
   final VoidCallback onDelete;
@@ -3028,6 +3070,11 @@ class _SelectionHeader extends StatelessWidget {
             tooltip: allSelected ? '取消全选' : '全选',
             onPressed: onToggleSelectAll,
             icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+          ),
+          IconButton(
+            tooltip: '收藏所选',
+            onPressed: count > 0 ? onFavoriteSelected : null,
+            icon: const Icon(Icons.bookmark_add_outlined),
           ),
           IconButton(
             tooltip: '复制所选',

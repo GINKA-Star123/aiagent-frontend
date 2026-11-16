@@ -101,6 +101,30 @@ class FavoriteStore {
     return added;
   }
 
+  static Future<int> addAll(
+    String userId,
+    List<FavoriteMessage> messages,
+  ) async {
+    if (userId.isEmpty || messages.isEmpty) {
+      return 0;
+    }
+    final items = await load(userId);
+    final existing = items.map((item) => item.key).toSet();
+    final sorted = [...messages]
+      ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    var added = 0;
+    for (final message in sorted) {
+      if (existing.add(message.key)) {
+        items.insert(0, message);
+        added += 1;
+      }
+    }
+    if (added > 0) {
+      await _save(userId, items.take(_maxItems).toList());
+    }
+    return added;
+  }
+
   static Future<void> clear(String userId) async {
     if (userId.isEmpty) {
       return;
