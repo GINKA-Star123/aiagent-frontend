@@ -1242,6 +1242,35 @@ class _ChatHomePageState extends State<ChatHomePage>
     ).showSnackBar(SnackBar(content: Text('已复制 $count 条消息')));
   }
 
+  Future<void> _shareSelectedMessages() async {
+    final selected = _selectedMessages;
+    if (selected.isEmpty) {
+      return;
+    }
+    final buffer = StringBuffer();
+    for (final message in selected) {
+      final sender = message.role == ChatRole.user
+          ? '我'
+          : (message.role == ChatRole.system ? '系统' : 'AIAgent');
+      buffer.writeln('$sender：${message.text}');
+    }
+    try {
+      await Share.share(buffer.toString().trim(), subject: '聊天记录');
+    } catch (_) {
+      // 分享失败不改变选择状态。
+      return;
+    }
+    if (!mounted) {
+      return;
+    }
+    final count = selected.length;
+    setState(() {
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
+      _statusText = '已分享 $count 条消息';
+    });
+  }
+
   Future<void> _deleteSelectedMessages() async {
     final selected = _selectedMessages;
     if (selected.isEmpty) {
@@ -1885,124 +1914,133 @@ class _ChatHomePageState extends State<ChatHomePage>
       return ActivationPage(onActivated: _handleActivated);
     }
 
-    return Scaffold(
-      backgroundColor: const Color(0xFFF2F3F5),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          _ChatBackground(
-            imagePath: _backgroundPath,
-            preset: _backgroundPreset,
-            dim: _backgroundDim,
-            blur: _backgroundBlur,
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                if (_selectionMode)
-                  _SelectionHeader(
-                    count: _selectedMessageKeys.length,
-                    onCancel: _cancelSelection,
-                    onCopy: _copySelectedMessages,
-                    onDelete: _deleteSelectedMessages,
-                  )
-                else
-                  _ChatHeader(
-                    title: 'AIAgent',
-                    agentAvatarPath: _agentAvatarPath,
-                    onAvatarTap: _openSettingsPage,
-                    statusText: _headerStatusText(),
-                    online: _online,
-                    speaking: _speaking,
-                    onOpenVoiceCall: _openVoiceCallPage,
-                    onOpenSettings: _openSettingsPage,
-                    onSearch: _openChatSearch,
-                    onCheckHealth: () => _checkHealth(),
-                    onStopAudio: _stopAudio,
-                  ),
-                Expanded(
-                  child: Stack(
-                    children: [
-                      _MessageList(
-                        messages: _messages,
-                        itemScrollController: _itemScrollController,
-                        itemPositionsListener: _itemPositionsListener,
-                        highlightedMessageKey: _highlightedMessageKey,
-                        feedback: _feedback,
-                        fontSize: _chatFontSize,
-                        compactAvatars: _compactAvatars,
-                        selectionMode: _selectionMode,
-                        selectedMessageKeys: _selectedMessageKeys,
-                        myAvatarPath: _myAvatarPath,
-                        agentAvatarPath: _agentAvatarPath,
-                        typing:
-                            _sending &&
-                            !_recording &&
-                            _messages.isNotEmpty &&
-                            _messages.last.role == ChatRole.user,
-                        playingAudioKey: _playingAudioKey,
-                        audioPosition: _audioPlaybackService.position,
-                        audioDuration: _audioPlaybackService.duration,
-                        audioSpeed: _audioSpeed,
-                        audioResumePositions: _audioResumePositions,
-                        onCycleAudioSpeed: _cycleAudioSpeed,
-                        onSeekAudio: _seekAudio,
-                        onOpenImage: _openImageViewer,
-                        onPlayAudio: _playMessageAudio,
-                        onDelete: _deleteMessage,
-                        onQuote: _quoteMessage,
-                        onSelect: _startSelection,
-                        onToggleSelect: _toggleSelection,
-                        onRetry: _retryMessage,
-                        onFeedback: _sendFeedback,
-                      ),
-                      if (_showJumpToBottom && !_selectionMode)
-                        Positioned(
-                          right: 12,
-                          bottom: 12,
-                          child: FloatingActionButton.small(
-                            heroTag: null,
-                            tooltip: '回到底部',
-                            backgroundColor: Colors.white,
-                            foregroundColor: const Color(0xFF666666),
-                            elevation: 2,
-                            onPressed: _jumpToBottom,
-                            child: const Icon(Icons.keyboard_arrow_down),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-                if (!_selectionMode)
-                  _InputBar(
-                    controller: _textController,
-                    focusNode: _composerFocus,
-                    quotedText: _quotedMessage?.text ?? '',
-                    quotedSender: _quotedMessage == null
-                        ? ''
-                        : (_quotedMessage!.role == ChatRole.user
-                              ? '我'
-                              : 'AIAgent'),
-                    onCancelQuote: () {
-                      setState(() {
-                        _quotedMessage = null;
-                      });
-                    },
-                    sending: _sending,
-                    recording: _recording,
-                    recordingSeconds: _recordingSeconds,
-                    onCancelRecording: _cancelRecording,
-                    selectedImagePath: _selectedImagePath,
-                    onSend: _sendMessage,
-                    onRecord: _toggleRecording,
-                    onPickImage: _pickImageFromGallery,
-                    onTakePhoto: _takePhoto,
-                    onClearImage: _clearSelectedImage,
-                  ),
-              ],
+    return PopScope(
+      canPop: !_selectionMode,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _selectionMode) {
+          _cancelSelection();
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFF2F3F5),
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            _ChatBackground(
+              imagePath: _backgroundPath,
+              preset: _backgroundPreset,
+              dim: _backgroundDim,
+              blur: _backgroundBlur,
             ),
-          ),
-        ],
+            SafeArea(
+              child: Column(
+                children: [
+                  if (_selectionMode)
+                    _SelectionHeader(
+                      count: _selectedMessageKeys.length,
+                      onCancel: _cancelSelection,
+                      onCopy: _copySelectedMessages,
+                      onShare: _shareSelectedMessages,
+                      onDelete: _deleteSelectedMessages,
+                    )
+                  else
+                    _ChatHeader(
+                      title: 'AIAgent',
+                      agentAvatarPath: _agentAvatarPath,
+                      onAvatarTap: _openSettingsPage,
+                      statusText: _headerStatusText(),
+                      online: _online,
+                      speaking: _speaking,
+                      onOpenVoiceCall: _openVoiceCallPage,
+                      onOpenSettings: _openSettingsPage,
+                      onSearch: _openChatSearch,
+                      onCheckHealth: () => _checkHealth(),
+                      onStopAudio: _stopAudio,
+                    ),
+                  Expanded(
+                    child: Stack(
+                      children: [
+                        _MessageList(
+                          messages: _messages,
+                          itemScrollController: _itemScrollController,
+                          itemPositionsListener: _itemPositionsListener,
+                          highlightedMessageKey: _highlightedMessageKey,
+                          feedback: _feedback,
+                          fontSize: _chatFontSize,
+                          compactAvatars: _compactAvatars,
+                          selectionMode: _selectionMode,
+                          selectedMessageKeys: _selectedMessageKeys,
+                          myAvatarPath: _myAvatarPath,
+                          agentAvatarPath: _agentAvatarPath,
+                          typing:
+                              _sending &&
+                              !_recording &&
+                              _messages.isNotEmpty &&
+                              _messages.last.role == ChatRole.user,
+                          playingAudioKey: _playingAudioKey,
+                          audioPosition: _audioPlaybackService.position,
+                          audioDuration: _audioPlaybackService.duration,
+                          audioSpeed: _audioSpeed,
+                          audioResumePositions: _audioResumePositions,
+                          onCycleAudioSpeed: _cycleAudioSpeed,
+                          onSeekAudio: _seekAudio,
+                          onOpenImage: _openImageViewer,
+                          onPlayAudio: _playMessageAudio,
+                          onDelete: _deleteMessage,
+                          onQuote: _quoteMessage,
+                          onSelect: _startSelection,
+                          onToggleSelect: _toggleSelection,
+                          onRetry: _retryMessage,
+                          onFeedback: _sendFeedback,
+                        ),
+                        if (_showJumpToBottom && !_selectionMode)
+                          Positioned(
+                            right: 12,
+                            bottom: 12,
+                            child: FloatingActionButton.small(
+                              heroTag: null,
+                              tooltip: '回到底部',
+                              backgroundColor: Colors.white,
+                              foregroundColor: const Color(0xFF666666),
+                              elevation: 2,
+                              onPressed: _jumpToBottom,
+                              child: const Icon(Icons.keyboard_arrow_down),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  if (!_selectionMode)
+                    _InputBar(
+                      controller: _textController,
+                      focusNode: _composerFocus,
+                      quotedText: _quotedMessage?.text ?? '',
+                      quotedSender: _quotedMessage == null
+                          ? ''
+                          : (_quotedMessage!.role == ChatRole.user
+                                ? '我'
+                                : 'AIAgent'),
+                      onCancelQuote: () {
+                        setState(() {
+                          _quotedMessage = null;
+                        });
+                      },
+                      sending: _sending,
+                      recording: _recording,
+                      recordingSeconds: _recordingSeconds,
+                      onCancelRecording: _cancelRecording,
+                      selectedImagePath: _selectedImagePath,
+                      onSend: _sendMessage,
+                      onRecord: _toggleRecording,
+                      onPickImage: _pickImageFromGallery,
+                      onTakePhoto: _takePhoto,
+                      onClearImage: _clearSelectedImage,
+                    ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2297,12 +2335,14 @@ class _SelectionHeader extends StatelessWidget {
     required this.count,
     required this.onCancel,
     required this.onCopy,
+    required this.onShare,
     required this.onDelete,
   });
 
   final int count;
   final VoidCallback onCancel;
   final VoidCallback onCopy;
+  final VoidCallback onShare;
   final VoidCallback onDelete;
 
   @override
@@ -2334,6 +2374,11 @@ class _SelectionHeader extends StatelessWidget {
             tooltip: '复制所选',
             onPressed: count > 0 ? onCopy : null,
             icon: const Icon(Icons.copy_outlined),
+          ),
+          IconButton(
+            tooltip: '分享所选',
+            onPressed: count > 0 ? onShare : null,
+            icon: const Icon(Icons.share_outlined),
           ),
           IconButton(
             tooltip: '删除所选',

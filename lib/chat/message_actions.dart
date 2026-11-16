@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:share_plus/share_plus.dart';
 
 import 'chat_message.dart';
 
@@ -65,6 +66,21 @@ class MessageActions {
                   }
                 },
               ),
+              if (message.text.trim().isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.share_outlined),
+                  title: const Text('分享文本'),
+                  onTap: () async {
+                    try {
+                      await Share.share(message.text, subject: '聊天消息');
+                    } catch (_) {
+                      // 分享失败不阻塞菜单关闭。
+                    }
+                    if (context.mounted) {
+                      Navigator.of(context).pop();
+                    }
+                  },
+                ),
               if (message.text.trim().isNotEmpty)
                 ListTile(
                   leading: const Icon(Icons.format_quote),
