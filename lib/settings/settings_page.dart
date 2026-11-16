@@ -1,8 +1,17 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
+
+import '../profile/avatar_store.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
     super.key,
+    required this.userId,
+    required this.myAvatarPath,
+    required this.agentAvatarPath,
+    required this.onAvatarsChanged,
     required this.apiBaseUrl,
     required this.username,
     required this.statusText,
@@ -17,6 +26,10 @@ class SettingsPage extends StatefulWidget {
     required this.onLogout,
   });
 
+  final String userId;
+  final String myAvatarPath;
+  final String agentAvatarPath;
+  final Future<void> Function() onAvatarsChanged;
   final String apiBaseUrl;
   final String username;
   final String statusText;
@@ -42,12 +55,18 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _clearing = false;
   bool _loggingOut = false;
   late bool _autoPlayVoice;
+  late String _myAvatarPath;
+  late String _agentAvatarPath;
+  final ImagePicker _imagePicker = ImagePicker();
+  bool _pickingAvatar = false;
 
   @override
   void initState() {
     super.initState();
     _apiBaseUrlController = TextEditingController(text: widget.apiBaseUrl);
     _autoPlayVoice = widget.autoPlayVoice;
+    _myAvatarPath = widget.myAvatarPath;
+    _agentAvatarPath = widget.agentAvatarPath;
   }
 
   @override
@@ -207,6 +226,94 @@ class _SettingsPageState extends State<SettingsPage> {
     await widget.onAutoPlayVoiceChanged(value);
   }
 
+  Future<void> _pickAvatar(AvatarOwner owner) async {
+    if (_pickingAvatar || widget.userId.isEmpty) {
+      return;
+    }
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('从相册选择'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('拍照'),
+                onTap: () => Navigator.of(sheetContext).pop(ImageSource.camera),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (source == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _pickingAvatar = true;
+    });
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 640,
+        maxHeight: 640,
+        imageQuality: 88,
+      );
+      if (picked == null) {
+        return;
+      }
+      final path = await AvatarStore.save(widget.userId, owner, picked.path);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        if (owner == AvatarOwner.user) {
+          _myAvatarPath = path;
+        } else {
+          _agentAvatarPath = path;
+        }
+      });
+      await widget.onAvatarsChanged();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('头像更新失败：$error')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _pickingAvatar = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _resetAvatar(AvatarOwner owner) async {
+    await AvatarStore.reset(widget.userId, owner);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      if (owner == AvatarOwner.user) {
+        _myAvatarPath = '';
+      } else {
+        _agentAvatarPath = '';
+      }
+    });
+    await widget.onAvatarsChanged();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -214,6 +321,35 @@ class _SettingsPageState extends State<SettingsPage> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _SettingsSection(
+            title: '头像',
+            children: [
+              _AvatarSettingTile(
+                title: '我的头像',
+                subtitle: '显示在你的消息右侧',
+                imagePath: _myAvatarPath,
+                fallbackLabel: '我',
+                isUser: true,
+                onPick: () => _pickAvatar(AvatarOwner.user),
+                onReset: _myAvatarPath.isEmpty
+                    ? null
+                    : () => _resetAvatar(AvatarOwner.user),
+              ),
+              const Divider(height: 20),
+              _AvatarSettingTile(
+                title: 'AIAgent 头像',
+                subtitle: '显示在回复左侧和顶部会话栏',
+                imagePath: _agentAvatarPath,
+                fallbackLabel: '绫',
+                isUser: false,
+                onPick: () => _pickAvatar(AvatarOwner.agent),
+                onReset: _agentAvatarPath.isEmpty
+                    ? null
+                    : () => _resetAvatar(AvatarOwner.agent),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
           _SettingsSection(
             title: '账号',
             children: [
@@ -348,6 +484,98 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _AvatarSettingTile extends StatelessWidget {
+  const _AvatarSettingTile({
+    required this.title,
+    required this.subtitle,
+    required this.imagePath,
+    required this.fallbackLabel,
+    required this.isUser,
+    required this.onPick,
+    this.onReset,
+  });
+
+  final String title;
+  final String subtitle;
+  final String imagePath;
+  final String fallbackLabel;
+  final bool isUser;
+  final VoidCallback onPick;
+  final VoidCallback? onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = imagePath.isNotEmpty && File(imagePath).existsSync();
+    return Row(
+      children: [
+        Container(
+          width: 52,
+          height: 52,
+          alignment: Alignment.center,
+          clipBehavior: Clip.antiAlias,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: isUser ? const Color(0xFF5B8CFF) : null,
+            gradient: isUser
+                ? null
+                : const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFFFF9A8F), Color(0xFFC74444)],
+                  ),
+          ),
+          child: hasImage
+              ? Image.file(
+                  File(imagePath),
+                  width: 52,
+                  height: 52,
+                  fit: BoxFit.cover,
+                  errorBuilder: (context, error, stackTrace) {
+                    return Text(
+                      fallbackLabel,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    );
+                  },
+                )
+              : Text(
+                  fallbackLabel,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
+              const SizedBox(height: 2),
+              Text(
+                subtitle,
+                style: const TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+        TextButton(onPressed: onPick, child: const Text('更换')),
+        if (onReset != null)
+          IconButton(
+            tooltip: '恢复默认',
+            onPressed: onReset,
+            icon: const Icon(Icons.restart_alt),
+          ),
+      ],
     );
   }
 }

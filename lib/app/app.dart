@@ -28,6 +28,7 @@ import '../core/telemetry.dart';
 import '../identity/identity_store.dart';
 import '../identity/user_identity.dart';
 import '../memory/memory_page.dart';
+import '../profile/avatar_store.dart';
 import '../profile/profile_page.dart';
 import '../session/presence_opening_gate.dart';
 import '../settings/app_preferences.dart';
@@ -73,6 +74,8 @@ class _ChatHomePageState extends State<ChatHomePage>
   late final OutboxStore _outboxStore;
   late final FeedbackStore _feedbackStore;
   Map<String, Map<String, dynamic>> _feedback = {};
+  String _myAvatarPath = '';
+  String _agentAvatarPath = '';
   TelemetryService? _telemetry;
 
   final Uuid _uuid = const Uuid();
@@ -238,6 +241,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _statusText = '准备好了';
     });
 
+    await _loadAvatars();
     await _restoreOutbox();
     _feedback = await _feedbackStore.load();
     final telemetry = _telemetry;
@@ -291,6 +295,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _statusText = statusText;
       _openingRequested = false;
     });
+    await _loadAvatars();
     await _checkHealth(silentWhenConnected: true);
     await _openPresenceSession();
   }
@@ -306,6 +311,8 @@ class _ChatHomePageState extends State<ChatHomePage>
       _identity = null;
       _needsActivation = true;
       _selectedImagePath = '';
+      _myAvatarPath = '';
+      _agentAvatarPath = '';
       _sending = false;
       _recording = false;
       _speaking = false;
@@ -1121,6 +1128,10 @@ class _ChatHomePageState extends State<ChatHomePage>
       MaterialPageRoute<void>(
         builder: (context) {
           return SettingsPage(
+            userId: _identity?.userId ?? '',
+            myAvatarPath: _myAvatarPath,
+            agentAvatarPath: _agentAvatarPath,
+            onAvatarsChanged: _loadAvatars,
             apiBaseUrl: _apiConfig.apiBaseUrl,
             username: _identity?.username ?? '未登录',
             statusText: _statusText,
@@ -1261,6 +1272,25 @@ class _ChatHomePageState extends State<ChatHomePage>
     });
   }
 
+  Future<void> _loadAvatars() async {
+    final identity = _identity;
+    if (identity == null) {
+      return;
+    }
+    final myAvatar = await AvatarStore.load(identity.userId, AvatarOwner.user);
+    final agentAvatar = await AvatarStore.load(
+      identity.userId,
+      AvatarOwner.agent,
+    );
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _myAvatarPath = myAvatar;
+      _agentAvatarPath = agentAvatar;
+    });
+  }
+
   String _headerStatusText() {
     if (!_online) {
       return '离线';
@@ -1300,6 +1330,8 @@ class _ChatHomePageState extends State<ChatHomePage>
           children: [
             _ChatHeader(
               title: 'AIAgent',
+              agentAvatarPath: _agentAvatarPath,
+              onAvatarTap: _openSettingsPage,
               statusText: _headerStatusText(),
               online: _online,
               speaking: _speaking,
@@ -1313,6 +1345,8 @@ class _ChatHomePageState extends State<ChatHomePage>
                 messages: _messages,
                 controller: _scrollController,
                 feedback: _feedback,
+                myAvatarPath: _myAvatarPath,
+                agentAvatarPath: _agentAvatarPath,
                 onPlayAudio: _playMessageAudio,
                 onRetry: _retryMessage,
                 onFeedback: _sendFeedback,
@@ -1339,6 +1373,8 @@ class _ChatHomePageState extends State<ChatHomePage>
 class _ChatHeader extends StatelessWidget {
   const _ChatHeader({
     required this.title,
+    required this.agentAvatarPath,
+    required this.onAvatarTap,
     required this.statusText,
     required this.online,
     required this.speaking,
@@ -1349,6 +1385,8 @@ class _ChatHeader extends StatelessWidget {
   });
 
   final String title;
+  final String agentAvatarPath;
+  final VoidCallback onAvatarTap;
   final String statusText;
   final bool online;
   final bool speaking;
@@ -1368,7 +1406,15 @@ class _ChatHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          const _ChatAvatar(label: '绫', isUser: false, size: 36),
+          GestureDetector(
+            onTap: onAvatarTap,
+            child: _ChatAvatar(
+              label: '绫',
+              isUser: false,
+              size: 36,
+              imagePath: agentAvatarPath,
+            ),
+          ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(
@@ -1450,15 +1496,17 @@ class _ChatAvatar extends StatelessWidget {
     required this.label,
     required this.isUser,
     this.size = 36,
+    this.imagePath = '',
   });
 
   final String label;
   final bool isUser;
   final double size;
+  final String imagePath;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final fallback = Container(
       width: size,
       height: size,
       alignment: Alignment.center,
@@ -1482,6 +1530,22 @@ class _ChatAvatar extends StatelessWidget {
         ),
       ),
     );
+
+    final path = imagePath.trim();
+    if (path.isEmpty) {
+      return fallback;
+    }
+    return SizedBox(
+      width: size,
+      height: size,
+      child: ClipOval(
+        child: Image.file(
+          File(path),
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => fallback,
+        ),
+      ),
+    );
   }
 }
 
@@ -1490,6 +1554,8 @@ class _MessageList extends StatelessWidget {
     required this.messages,
     required this.controller,
     required this.feedback,
+    required this.myAvatarPath,
+    required this.agentAvatarPath,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
@@ -1498,6 +1564,8 @@ class _MessageList extends StatelessWidget {
   final List<ChatMessage> messages;
   final ScrollController controller;
   final Map<String, Map<String, dynamic>> feedback;
+  final String myAvatarPath;
+  final String agentAvatarPath;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
@@ -1505,7 +1573,7 @@ class _MessageList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (messages.isEmpty) {
-      return const _EmptyChatView();
+      return _EmptyChatView(agentAvatarPath: agentAvatarPath);
     }
     return ListView.builder(
       controller: controller,
@@ -1522,6 +1590,8 @@ class _MessageList extends StatelessWidget {
           message: message,
           showTime: showTime,
           feedback: feedback,
+          myAvatarPath: myAvatarPath,
+          agentAvatarPath: agentAvatarPath,
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
           onFeedback: onFeedback,
@@ -1532,7 +1602,9 @@ class _MessageList extends StatelessWidget {
 }
 
 class _EmptyChatView extends StatelessWidget {
-  const _EmptyChatView();
+  const _EmptyChatView({required this.agentAvatarPath});
+
+  final String agentAvatarPath;
 
   @override
   Widget build(BuildContext context) {
@@ -1540,7 +1612,12 @@ class _EmptyChatView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const _ChatAvatar(label: '绫', isUser: false, size: 64),
+          _ChatAvatar(
+            label: '绫',
+            isUser: false,
+            size: 64,
+            imagePath: agentAvatarPath,
+          ),
           const SizedBox(height: 16),
           const Text(
             '开始和 AIAgent 聊天吧',
@@ -1566,6 +1643,8 @@ class _MessageBubble extends StatelessWidget {
     required this.message,
     required this.showTime,
     required this.feedback,
+    required this.myAvatarPath,
+    required this.agentAvatarPath,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
@@ -1574,6 +1653,8 @@ class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final bool showTime;
   final Map<String, Map<String, dynamic>> feedback;
+  final String myAvatarPath;
+  final String agentAvatarPath;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
@@ -1805,7 +1886,12 @@ class _MessageBubble extends StatelessWidget {
                 : MainAxisAlignment.start,
             children: [
               if (!isUser) ...[
-                const _ChatAvatar(label: '绫', isUser: false, size: 36),
+                _ChatAvatar(
+                  label: '绫',
+                  isUser: false,
+                  size: 36,
+                  imagePath: agentAvatarPath,
+                ),
                 const SizedBox(width: 8),
               ],
               Flexible(
@@ -1818,7 +1904,12 @@ class _MessageBubble extends StatelessWidget {
               ),
               if (isUser) ...[
                 const SizedBox(width: 8),
-                const _ChatAvatar(label: '我', isUser: true, size: 36),
+                _ChatAvatar(
+                  label: '我',
+                  isUser: true,
+                  size: 36,
+                  imagePath: myAvatarPath,
+                ),
               ],
             ],
           ),
