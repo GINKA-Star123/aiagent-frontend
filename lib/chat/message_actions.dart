@@ -55,6 +55,29 @@ class MessageActions {
                   }
                 },
               ),
+              if (message.text.trim().isNotEmpty)
+                ListTile(
+                  leading: const Icon(Icons.format_quote),
+                  title: const Text('复制引用'),
+                  onTap: () async {
+                    final sender = message.role == ChatRole.user
+                        ? '我'
+                        : 'AIAgent';
+                    final buffer = StringBuffer('> [')
+                      ..write(sender)
+                      ..write('] ')
+                      ..write(message.text.replaceAll('\n', ' '));
+                    await Clipboard.setData(
+                      ClipboardData(text: buffer.toString()),
+                    );
+                    if (context.mounted) {
+                      Navigator.of(context).pop();
+                      ScaffoldMessenger.of(
+                        context,
+                      ).showSnackBar(const SnackBar(content: Text('已复制引用')));
+                    }
+                  },
+                ),
               if (hasAudio)
                 ListTile(
                   leading: Icon(

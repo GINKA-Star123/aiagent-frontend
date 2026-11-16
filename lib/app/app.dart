@@ -2891,7 +2891,7 @@ class _InputBar extends StatelessWidget {
   }
 }
 
-class _RecordingBanner extends StatelessWidget {
+class _RecordingBanner extends StatefulWidget {
   const _RecordingBanner({
     required this.seconds,
     required this.onCancel,
@@ -2903,52 +2903,99 @@ class _RecordingBanner extends StatelessWidget {
   final VoidCallback onSend;
 
   @override
+  State<_RecordingBanner> createState() => _RecordingBannerState();
+}
+
+class _RecordingBannerState extends State<_RecordingBanner> {
+  double _dragDy = 0;
+  bool _armed = false;
+
+  @override
   Widget build(BuildContext context) {
-    return Semantics(
-      container: true,
-      liveRegion: true,
-      label: '正在录音',
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFF1F0),
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFF3C8C2)),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 9,
-              height: 9,
-              decoration: const BoxDecoration(
-                color: Color(0xFFC74444),
-                shape: BoxShape.circle,
+    final label = _armed ? '松手取消' : '正在录音  ${_formatDuration(widget.seconds)}';
+    return GestureDetector(
+      onVerticalDragUpdate: (details) {
+        setState(() {
+          _dragDy = (_dragDy + details.delta.dy).clamp(-80.0, 0.0).toDouble();
+          _armed = _dragDy < -50;
+        });
+      },
+      onVerticalDragEnd: (_) {
+        final shouldCancel = _armed;
+        setState(() {
+          _dragDy = 0;
+          _armed = false;
+        });
+        if (shouldCancel) {
+          widget.onCancel();
+        }
+      },
+      child: Transform.translate(
+        offset: Offset(0, _dragDy),
+        child: Semantics(
+          container: true,
+          liveRegion: true,
+          label: _armed ? '松手取消录音' : '正在录音',
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            decoration: BoxDecoration(
+              color: _armed ? const Color(0xFFFFE0DD) : const Color(0xFFFFF1F0),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: _armed
+                    ? const Color(0xFFC74444)
+                    : const Color(0xFFF3C8C2),
               ),
             ),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                '正在录音  ${_formatDuration(seconds)}',
-                style: const TextStyle(
-                  fontSize: 13,
-                  color: Color(0xFF9A2E2A),
-                  fontWeight: FontWeight.w600,
+            child: Row(
+              children: [
+                Container(
+                  width: 9,
+                  height: 9,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFC74444),
+                    shape: BoxShape.circle,
+                  ),
                 ),
-              ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        label,
+                        style: const TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF9A2E2A),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        _armed ? '松开手指取消' : '上滑取消',
+                        style: const TextStyle(
+                          fontSize: 11,
+                          color: Color(0xFFB07A75),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(onPressed: widget.onCancel, child: const Text('取消')),
+                const SizedBox(width: 4),
+                FilledButton.icon(
+                  onPressed: widget.onSend,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFFC74444),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    minimumSize: const Size(0, 34),
+                  ),
+                  icon: const Icon(Icons.send_rounded, size: 16),
+                  label: const Text('发送'),
+                ),
+              ],
             ),
-            TextButton(onPressed: onCancel, child: const Text('取消')),
-            const SizedBox(width: 4),
-            FilledButton.icon(
-              onPressed: onSend,
-              style: FilledButton.styleFrom(
-                backgroundColor: const Color(0xFFC74444),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                minimumSize: const Size(0, 34),
-              ),
-              icon: const Icon(Icons.send_rounded, size: 16),
-              label: const Text('发送'),
-            ),
-          ],
+          ),
         ),
       ),
     );
