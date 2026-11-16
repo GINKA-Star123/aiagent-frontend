@@ -1689,6 +1689,112 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  String _formatDayLabel(DateTime day) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final diff = today.difference(day).inDays;
+    if (diff == 0) {
+      return '今天';
+    }
+    if (diff == 1) {
+      return '昨天';
+    }
+    if (day.year == now.year) {
+      return '${day.month}月${day.day}日';
+    }
+    return '${day.year}年${day.month}月${day.day}日';
+  }
+
+  bool _sameCalendarDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
+
+  Future<void> _showDateJumpPicker() async {
+    if (_messages.isEmpty) {
+      return;
+    }
+    final counts = <DateTime, int>{};
+    for (final message in _messages) {
+      final day = DateTime(
+        message.createdAt.year,
+        message.createdAt.month,
+        message.createdAt.day,
+      );
+      counts[day] = (counts[day] ?? 0) + 1;
+    }
+    final days = counts.keys.toList()..sort((a, b) => b.compareTo(a));
+    final selected = await showModalBottomSheet<DateTime>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: Text(
+                  '跳转到日期',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
+              ),
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.sizeOf(sheetContext).height * 0.55,
+                ),
+                child: ListView.separated(
+                  shrinkWrap: true,
+                  itemCount: days.length,
+                  separatorBuilder: (context, index) =>
+                      const Divider(height: 1),
+                  itemBuilder: (context, index) {
+                    final day = days[index];
+                    return ListTile(
+                      leading: const Icon(Icons.event_outlined),
+                      title: Text(_formatDayLabel(day)),
+                      subtitle: Text('${counts[day]} 条消息'),
+                      onTap: () => Navigator.of(sheetContext).pop(day),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+    if (selected == null || !mounted) {
+      return;
+    }
+    final index = _messages.indexWhere(
+      (message) => _sameCalendarDay(message.createdAt, selected),
+    );
+    if (index < 0) {
+      return;
+    }
+    setState(() {
+      _highlightedMessageKey = _messageKey(_messages[index]);
+    });
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _highlightedMessageKey = '';
+      });
+    });
+    if (_itemScrollController.isAttached) {
+      await _itemScrollController.scrollTo(
+        index: index,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOut,
+        alignment: 0.25,
+      );
+    }
+  }
+
   Future<void> _openSettingsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -1954,6 +2060,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                       onOpenVoiceCall: _openVoiceCallPage,
                       onOpenSettings: _openSettingsPage,
                       onSearch: _openChatSearch,
+                      onJumpDate: _showDateJumpPicker,
                       onCheckHealth: () => _checkHealth(),
                       onStopAudio: _stopAudio,
                     ),
@@ -2209,6 +2316,7 @@ class _ChatHeader extends StatelessWidget {
     required this.onOpenVoiceCall,
     required this.onOpenSettings,
     required this.onSearch,
+    required this.onJumpDate,
     required this.onCheckHealth,
     required this.onStopAudio,
   });
@@ -2222,6 +2330,7 @@ class _ChatHeader extends StatelessWidget {
   final VoidCallback onOpenVoiceCall;
   final VoidCallback onOpenSettings;
   final VoidCallback onSearch;
+  final VoidCallback onJumpDate;
   final VoidCallback onCheckHealth;
   final VoidCallback onStopAudio;
 
@@ -2313,12 +2422,18 @@ class _ChatHeader extends StatelessWidget {
                 onCheckHealth();
               } else if (value == 'stop') {
                 onStopAudio();
+              } else if (value == 'jumpDate') {
+                onJumpDate();
               } else if (value == 'settings') {
                 onOpenSettings();
               }
             },
             itemBuilder: (context) => <PopupMenuEntry<String>>[
               const PopupMenuItem<String>(value: 'health', child: Text('检查连接')),
+              const PopupMenuItem<String>(
+                value: 'jumpDate',
+                child: Text('跳转日期'),
+              ),
               if (speaking)
                 const PopupMenuItem<String>(value: 'stop', child: Text('停止语音')),
               const PopupMenuItem<String>(value: 'settings', child: Text('设置')),
