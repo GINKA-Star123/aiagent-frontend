@@ -2278,9 +2278,27 @@ class _ImagePagerState extends State<_ImagePager> {
   final TransformationController _transformationController =
       TransformationController();
   late int _index = widget.initialIndex;
+  bool _zoomed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _transformationController.addListener(_handleZoomChanged);
+  }
+
+  void _handleZoomChanged() {
+    final zoomed = _transformationController.value.getMaxScaleOnAxis() > 1.01;
+    if (zoomed == _zoomed || !mounted) {
+      return;
+    }
+    setState(() {
+      _zoomed = zoomed;
+    });
+  }
 
   @override
   void dispose() {
+    _transformationController.removeListener(_handleZoomChanged);
     _controller.dispose();
     _transformationController.dispose();
     super.dispose();
@@ -2316,6 +2334,9 @@ class _ImagePagerState extends State<_ImagePager> {
           children: [
             PageView.builder(
               controller: _controller,
+              physics: _zoomed
+                  ? const NeverScrollableScrollPhysics()
+                  : const PageScrollPhysics(),
               itemCount: widget.imagePaths.length,
               onPageChanged: (value) {
                 _transformationController.value = Matrix4.identity();
@@ -2331,7 +2352,7 @@ class _ImagePagerState extends State<_ImagePager> {
                   },
                   child: InteractiveViewer(
                     transformationController: _transformationController,
-                    panEnabled: false,
+                    panEnabled: _zoomed,
                     minScale: 1,
                     maxScale: 4,
                     child: Center(
@@ -2857,7 +2878,7 @@ class _MessageList extends StatelessWidget {
   }
 }
 
-class _EmptyChatView extends StatelessWidget {
+class _EmptyChatView extends StatefulWidget {
   const _EmptyChatView({
     required this.agentAvatarPath,
     required this.onSuggestionSelected,
@@ -2866,13 +2887,32 @@ class _EmptyChatView extends StatelessWidget {
   final String agentAvatarPath;
   final ValueChanged<String> onSuggestionSelected;
 
-  static const List<String> _suggestions = [
+  @override
+  State<_EmptyChatView> createState() => _EmptyChatViewState();
+}
+
+class _EmptyChatViewState extends State<_EmptyChatView> {
+  static const List<String> _pool = [
     '今天想和你聊聊',
     '帮我写一段自我介绍',
     '用一句话解释量子纠缠',
     '给我讲个冷笑话',
     '推荐一部适合周末看的电影',
+    '给我三个早起的小技巧',
+    '帮我把这句话改得更温柔',
+    '推荐一本值得读的书',
+    '用三句话总结今天的新闻',
+    '陪我做个五分钟放松练习',
   ];
+
+  late List<String> _visible = _pool.take(5).toList();
+
+  void _shuffle() {
+    final pool = List.of(_pool)..shuffle(math.Random());
+    setState(() {
+      _visible = pool.take(5).toList();
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -2886,7 +2926,7 @@ class _EmptyChatView extends StatelessWidget {
               label: '绫',
               isUser: false,
               size: 64,
-              imagePath: agentAvatarPath,
+              imagePath: widget.agentAvatarPath,
             ),
             const SizedBox(height: 16),
             const Text(
@@ -2913,12 +2953,17 @@ class _EmptyChatView extends StatelessWidget {
               runSpacing: 8,
               alignment: WrapAlignment.center,
               children: [
-                for (final suggestion in _suggestions)
+                for (final suggestion in _visible)
                   ActionChip(
                     label: Text(suggestion),
-                    onPressed: () => onSuggestionSelected(suggestion),
+                    onPressed: () => widget.onSuggestionSelected(suggestion),
                   ),
               ],
+            ),
+            TextButton.icon(
+              onPressed: _shuffle,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('换一批', style: TextStyle(fontSize: 12)),
             ),
           ],
         ),
