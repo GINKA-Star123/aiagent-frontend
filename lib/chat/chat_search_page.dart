@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import 'chat_message.dart';
+import 'search_history_store.dart';
 
 class ChatSearchPage extends StatefulWidget {
   const ChatSearchPage({super.key, required this.messages});
@@ -17,6 +20,69 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
   String _query = '';
   String _senderFilter = 'all';
   String _typeFilter = 'all';
+  List<String> _history = [];
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadSearchState());
+  }
+
+  Future<void> _loadSearchState() async {
+    final history = await SearchHistoryStore.loadHistory();
+    final sender = await SearchHistoryStore.loadSenderFilter();
+    final type = await SearchHistoryStore.loadTypeFilter();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _history = history;
+      _senderFilter = sender;
+      _typeFilter = type;
+    });
+  }
+
+  Future<void> _rememberQuery(String value) async {
+    final next = await SearchHistoryStore.addQuery(value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _history = next;
+    });
+  }
+
+  void _useHistory(String value) {
+    _controller.text = value;
+    _controller.selection = TextSelection.collapsed(offset: value.length);
+    setState(() {
+      _query = value;
+    });
+  }
+
+  Future<void> _clearHistory() async {
+    await SearchHistoryStore.clearHistory();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _history = [];
+    });
+  }
+
+  void _setSenderFilter(String value) {
+    setState(() {
+      _senderFilter = value;
+    });
+    unawaited(SearchHistoryStore.saveSenderFilter(value));
+  }
+
+  void _setTypeFilter(String value) {
+    setState(() {
+      _typeFilter = value;
+    });
+    unawaited(SearchHistoryStore.saveTypeFilter(value));
+  }
 
   @override
   void dispose() {
@@ -81,6 +147,7 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
               _query = value;
             });
           },
+          onSubmitted: (value) => unawaited(_rememberQuery(value)),
         ),
         actions: [
           if (_query.isNotEmpty)
@@ -100,23 +167,67 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
     );
   }
 
-  Widget _buildBody() {
-    if (_query.trim().isEmpty) {
-      return const Center(
+  Widget _buildEmptyState() {
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.search, size: 48, color: Color(0xFFBBBBBB)),
-            SizedBox(height: 12),
-            Text('输入关键字搜索聊天记录', style: TextStyle(color: Color(0xFF999999))),
-            SizedBox(height: 6),
-            Text(
+            const Icon(Icons.search, size: 48, color: Color(0xFFBBBBBB)),
+            const SizedBox(height: 12),
+            const Text(
+              '输入关键字搜索聊天记录',
+              style: TextStyle(color: Color(0xFF999999)),
+            ),
+            const SizedBox(height: 6),
+            const Text(
               '点击结果跳转到原消息，长按查看全文',
               style: TextStyle(fontSize: 12, color: Color(0xFFAAAAAA)),
             ),
+            if (_history.isNotEmpty) ...[
+              const SizedBox(height: 20),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    '最近搜索',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF777777),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  TextButton(
+                    onPressed: _clearHistory,
+                    child: const Text('清除', style: TextStyle(fontSize: 11)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                alignment: WrapAlignment.center,
+                children: [
+                  for (final query in _history)
+                    ActionChip(
+                      label: Text(query),
+                      onPressed: () => _useHistory(query),
+                    ),
+                ],
+              ),
+            ],
           ],
         ),
-      );
+      ),
+    );
+  }
+
+  Widget _buildBody() {
+    if (_query.trim().isEmpty) {
+      return _buildEmptyState();
     }
 
     final results = _results;
@@ -186,7 +297,10 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
                             query: _query.trim(),
                           ),
                         ),
-                        onTap: () => Navigator.of(context).pop(message),
+                        onTap: () {
+                          unawaited(_rememberQuery(_query.trim()));
+                          Navigator.of(context).pop(message);
+                        },
                         onLongPress: () => _showDetail(message),
                       ),
                     );
@@ -213,38 +327,38 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
                 _filterChip(
                   label: '全部',
                   selected: _senderFilter == 'all',
-                  onTap: () => setState(() => _senderFilter = 'all'),
+                  onTap: () => _setSenderFilter('all'),
                 ),
                 _filterChip(
                   label: '我',
                   selected: _senderFilter == 'me',
-                  onTap: () => setState(() => _senderFilter = 'me'),
+                  onTap: () => _setSenderFilter('me'),
                 ),
                 _filterChip(
                   label: 'AIAgent',
                   selected: _senderFilter == 'agent',
-                  onTap: () => setState(() => _senderFilter = 'agent'),
+                  onTap: () => _setSenderFilter('agent'),
                 ),
                 const VerticalDivider(width: 12, indent: 8, endIndent: 8),
                 _filterChip(
                   label: '文字',
                   selected: _typeFilter == 'text',
-                  onTap: () => setState(() => _typeFilter = 'text'),
+                  onTap: () => _setTypeFilter('text'),
                 ),
                 _filterChip(
                   label: '图片',
                   selected: _typeFilter == 'image',
-                  onTap: () => setState(() => _typeFilter = 'image'),
+                  onTap: () => _setTypeFilter('image'),
                 ),
                 _filterChip(
                   label: '语音',
                   selected: _typeFilter == 'voice',
-                  onTap: () => setState(() => _typeFilter = 'voice'),
+                  onTap: () => _setTypeFilter('voice'),
                 ),
                 _filterChip(
                   label: '全部类型',
                   selected: _typeFilter == 'all',
-                  onTap: () => setState(() => _typeFilter = 'all'),
+                  onTap: () => _setTypeFilter('all'),
                 ),
               ],
             ),
