@@ -137,6 +137,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _speaking = false;
   bool _recording = false;
   int _recordingSeconds = 0;
+  static const int _maxRecordingSeconds = 60;
   Timer? _recordingTimer;
   bool _autoPlayVoice = true;
   double _chatFontSize = AppPreferences.defaultChatFontSize;
@@ -1100,6 +1101,10 @@ class _ChatHomePageState extends State<ChatHomePage>
       setState(() {
         _recordingSeconds += 1;
       });
+      if (_recordingSeconds >= _maxRecordingSeconds) {
+        timer.cancel();
+        unawaited(_stopRecordingAndSend());
+      }
     });
   }
 
@@ -4338,7 +4343,7 @@ class _RecordingBannerState extends State<_RecordingBanner> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        _armed ? '松开手指取消' : '上滑取消',
+                        _armed ? '松开手指取消' : '上滑取消 · 最长 60 秒',
                         style: const TextStyle(
                           fontSize: 11,
                           color: Color(0xFFB07A75),
