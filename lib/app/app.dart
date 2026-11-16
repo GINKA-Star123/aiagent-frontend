@@ -152,6 +152,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   String _statusText = '正在初始化...';
   String _selectedImagePath = '';
   bool _selectionMode = false;
+  double _lastBottomInset = 0;
   final Set<String> _selectedMessageKeys = {};
 
   @override
@@ -941,6 +942,17 @@ class _ChatHomePageState extends State<ChatHomePage>
       });
     } catch (_) {
       _online = true;
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    final view = WidgetsBinding.instance.platformDispatcher.views.first;
+    final bottom = view.viewInsets.bottom / view.devicePixelRatio;
+    final previous = _lastBottomInset;
+    _lastBottomInset = bottom;
+    if (bottom > previous + 1 && !_selectionMode && !_showJumpToBottom) {
+      _scrollToBottomLater();
     }
   }
 
