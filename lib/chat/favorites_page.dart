@@ -13,13 +13,31 @@ class FavoritesPage extends StatefulWidget {
 }
 
 class _FavoritesPageState extends State<FavoritesPage> {
+  final TextEditingController _searchController = TextEditingController();
   List<FavoriteMessage> _items = [];
+  String _query = '';
   bool _loading = true;
+
+  List<FavoriteMessage> get _filteredItems {
+    final query = _query.trim().toLowerCase();
+    if (query.isEmpty) {
+      return _items;
+    }
+    return _items
+        .where((item) => item.text.toLowerCase().contains(query))
+        .toList();
+  }
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -132,7 +150,47 @@ class _FavoritesPageState extends State<FavoritesPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFFF2F3F5),
-      appBar: AppBar(backgroundColor: Colors.white, title: const Text('收藏夹')),
+      appBar: AppBar(
+        backgroundColor: Colors.white,
+        title: Text('收藏夹（${_items.length}）'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(52),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (value) {
+                setState(() {
+                  _query = value;
+                });
+              },
+              decoration: InputDecoration(
+                hintText: '搜索收藏内容',
+                isDense: true,
+                prefixIcon: const Icon(Icons.search, size: 18),
+                suffixIcon: _query.isEmpty
+                    ? null
+                    : IconButton(
+                        tooltip: '清空',
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {
+                            _query = '';
+                          });
+                        },
+                        icon: const Icon(Icons.close, size: 18),
+                      ),
+                filled: true,
+                fillColor: const Color(0xFFF2F3F5),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
           : _items.isEmpty
@@ -155,12 +213,19 @@ class _FavoritesPageState extends State<FavoritesPage> {
                 ],
               ),
             )
+          : _filteredItems.isEmpty
+          ? const Center(
+              child: Text(
+                '没有找到相关收藏',
+                style: TextStyle(color: Color(0xFF999999)),
+              ),
+            )
           : ListView.separated(
               padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
-              itemCount: _items.length,
+              itemCount: _filteredItems.length,
               separatorBuilder: (context, index) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
-                final item = _items[index];
+                final item = _filteredItems[index];
                 return Material(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(10),
