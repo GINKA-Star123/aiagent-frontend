@@ -11,6 +11,7 @@ class AudioPlaybackService {
     });
 
     _player.onPlayerComplete.listen((_) {
+      _completionController.add(null);
       _speakingController.add(false);
       position.value = Duration.zero;
     });
@@ -27,6 +28,8 @@ class AudioPlaybackService {
   final AudioPlayer _player = AudioPlayer();
   final StreamController<bool> _speakingController =
       StreamController<bool>.broadcast();
+  final StreamController<void> _completionController =
+      StreamController<void>.broadcast();
   final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
   final ValueNotifier<Duration> duration = ValueNotifier(Duration.zero);
   double _playbackRate = 1.0;
@@ -34,6 +37,7 @@ class AudioPlaybackService {
   double get playbackRate => _playbackRate;
 
   Stream<bool> get speakingStream => _speakingController.stream;
+  Stream<void> get completionStream => _completionController.stream;
 
   Future<void> playUrl(String url) async {
     final normalizedUrl = url.trim();
@@ -85,6 +89,7 @@ class AudioPlaybackService {
   Future<void> dispose() async {
     await _player.dispose();
     await _speakingController.close();
+    await _completionController.close();
     position.dispose();
     duration.dispose();
   }

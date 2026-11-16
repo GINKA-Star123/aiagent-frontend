@@ -108,6 +108,8 @@ class _ChatHomePageState extends State<ChatHomePage>
   );
 
   StreamSubscription<bool>? _speakingSubscription;
+  StreamSubscription<void>? _audioCompletionSubscription;
+  final Map<String, Duration> _audioResumePositions = {};
 
   ApiConfig _apiConfig = ApiConfig.defaults();
   UserIdentity? _identity;
@@ -143,6 +145,17 @@ class _ChatHomePageState extends State<ChatHomePage>
     _speakingSubscription = _audioPlaybackService.speakingStream.listen(
       _handleSpeakingChanged,
     );
+    _audioCompletionSubscription = _audioPlaybackService.completionStream
+        .listen((_) {
+          final key = _playingAudioKey;
+          if (key.isEmpty) {
+            return;
+          }
+          _audioResumePositions.remove(key);
+          if (mounted) {
+            setState(() {});
+          }
+        });
     WidgetsBinding.instance.addObserver(this);
     _textController.addListener(_onDraftChanged);
     _itemPositionsListener.itemPositions.addListener(_handlePositions);
@@ -160,6 +173,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     _itemPositionsListener.itemPositions.removeListener(_handlePositions);
     _highlightTimer?.cancel();
     _speakingSubscription?.cancel();
+    _audioCompletionSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _connectivitySub?.cancel();
     _outboxTimer?.cancel();
@@ -370,6 +384,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _needsActivation = true;
       _selectedImagePath = '';
       _quotedMessage = null;
+      _audioResumePositions.clear();
       _myAvatarPath = '';
       _agentAvatarPath = '';
       _backgroundPath = '';
@@ -1187,6 +1202,7 @@ class _ChatHomePageState extends State<ChatHomePage>
         _playingAudioKey == _messageKey(message)) {
       await _audioPlaybackService.stop();
     }
+    _audioResumePositions.remove(_messageKey(message));
     if (!mounted) {
       return;
     }
@@ -1260,6 +1276,37 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _audioPlaybackService.seek(position);
   }
 
+  void _rememberAudioPosition() {
+    final key = _playingAudioKey;
+    if (key.isEmpty) {
+      return;
+    }
+    final position = _audioPlaybackService.position.value;
+    final duration = _audioPlaybackService.duration.value;
+    if (position.inMilliseconds < 1000) {
+      _audioResumePositions.remove(key);
+      return;
+    }
+    if (duration > Duration.zero &&
+        position >= duration - const Duration(seconds: 2)) {
+      _audioResumePositions.remove(key);
+      return;
+    }
+    _audioResumePositions[key] = position;
+  }
+
+  Future<void> _stopAudio() async {
+    _rememberAudioPosition();
+    await _audioPlaybackService.stop();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _playingAudioKey = '';
+      _statusText = '已停止播放';
+    });
+  }
+
   Future<void> _playMessageAudio(ChatMessage message) async {
     final key = _messageKey(message);
     final audioUrl = _apiClient.authorizedAudioUrl(message.audioUrl);
@@ -1270,6 +1317,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       return;
     }
     if (_playingAudioKey == key && _speaking) {
+      _rememberAudioPosition();
       await _audioPlaybackService.stop();
       if (!mounted) {
         return;
@@ -1280,8 +1328,15 @@ class _ChatHomePageState extends State<ChatHomePage>
       });
       return;
     }
+    if (_playingAudioKey.isNotEmpty && _playingAudioKey != key) {
+      _rememberAudioPosition();
+    }
     try {
       await _audioPlaybackService.playUrl(audioUrl);
+      final resume = _audioResumePositions[key];
+      if (resume != null && resume.inMilliseconds > 1000) {
+        await _audioPlaybackService.seek(resume);
+      }
       if (!mounted) {
         return;
       }
@@ -1632,6 +1687,7 @@ class _ChatHomePageState extends State<ChatHomePage>
 
       _selectedImagePath = '';
       _quotedMessage = null;
+      _audioResumePositions.clear();
       _statusText = '聊天历史已清空';
     });
   }
@@ -1720,7 +1776,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                   onOpenSettings: _openSettingsPage,
                   onSearch: _openChatSearch,
                   onCheckHealth: () => _checkHealth(),
-                  onStopAudio: _audioPlaybackService.stop,
+                  onStopAudio: _stopAudio,
                 ),
                 Expanded(
                   child: Stack(
@@ -1744,6 +1800,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                         audioPosition: _audioPlaybackService.position,
                         audioDuration: _audioPlaybackService.duration,
                         audioSpeed: _audioSpeed,
+                        audioResumePositions: _audioResumePositions,
                         onCycleAudioSpeed: _cycleAudioSpeed,
                         onSeekAudio: _seekAudio,
                         onOpenImage: _openImageViewer,
@@ -2163,6 +2220,7 @@ class _MessageList extends StatelessWidget {
     required this.audioPosition,
     required this.audioDuration,
     required this.audioSpeed,
+    required this.audioResumePositions,
     required this.onCycleAudioSpeed,
     required this.onSeekAudio,
     required this.onOpenImage,
@@ -2187,6 +2245,7 @@ class _MessageList extends StatelessWidget {
   final ValueListenable<Duration> audioPosition;
   final ValueListenable<Duration> audioDuration;
   final double audioSpeed;
+  final Map<String, Duration> audioResumePositions;
   final VoidCallback onCycleAudioSpeed;
   final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
@@ -2245,6 +2304,7 @@ class _MessageList extends StatelessWidget {
           audioPosition: audioPosition,
           audioDuration: audioDuration,
           audioSpeed: audioSpeed,
+          audioResumePositions: audioResumePositions,
           onCycleAudioSpeed: onCycleAudioSpeed,
           onSeekAudio: onSeekAudio,
           onOpenImage: onOpenImage,
@@ -2500,6 +2560,7 @@ class _MessageBubble extends StatelessWidget {
     required this.audioPosition,
     required this.audioDuration,
     required this.audioSpeed,
+    required this.audioResumePositions,
     required this.onCycleAudioSpeed,
     required this.onSeekAudio,
     required this.onOpenImage,
@@ -2523,6 +2584,7 @@ class _MessageBubble extends StatelessWidget {
   final ValueListenable<Duration> audioPosition;
   final ValueListenable<Duration> audioDuration;
   final double audioSpeed;
+  final Map<String, Duration> audioResumePositions;
   final VoidCallback onCycleAudioSpeed;
   final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
@@ -2784,6 +2846,9 @@ class _MessageBubble extends StatelessWidget {
               valueListenable: audioDuration,
               builder: (context, duration, _) {
                 final isPlaying = playingAudioKey == feedbackKey;
+                final resume = audioResumePositions[feedbackKey];
+                final resumable =
+                    !isPlaying && resume != null && resume.inSeconds > 1;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -2807,7 +2872,7 @@ class _MessageBubble extends StatelessWidget {
                             size: 16,
                           ),
                           label: Text(
-                            isPlaying ? '停止播放' : '播放语音',
+                            isPlaying ? '停止播放' : (resumable ? '继续播放' : '播放语音'),
                             style: const TextStyle(fontSize: 12),
                           ),
                         ),
