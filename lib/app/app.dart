@@ -2124,7 +2124,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       showDragHandle: true,
       builder: (sheetContext) {
         return SafeArea(
-          child: Padding(
+          child: SingleChildScrollView(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
             child: Column(
               mainAxisSize: MainAxisSize.min,
