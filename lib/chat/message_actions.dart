@@ -11,6 +11,7 @@ class MessageActions {
     bool playing = false,
     ValueChanged<ChatMessage>? onRetry,
     ValueChanged<ChatMessage>? onDelete,
+    ValueChanged<ChatMessage>? onQuote,
   }) async {
     final hasAudio = message.audioUrl.isNotEmpty;
 
@@ -30,6 +31,15 @@ class MessageActions {
                   onTap: () {
                     Navigator.of(context).pop();
                     onRetry?.call(message);
+                  },
+                ),
+              if (onQuote != null)
+                ListTile(
+                  leading: const Icon(Icons.reply),
+                  title: const Text('引用'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    onQuote(message);
                   },
                 ),
               ListTile(

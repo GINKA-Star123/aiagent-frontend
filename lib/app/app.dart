@@ -111,6 +111,8 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _openingRequested = false;
   bool _showJumpToBottom = false;
   String _playingAudioKey = '';
+  ChatMessage? _quotedMessage;
+  final FocusNode _composerFocus = FocusNode();
   String _statusText = '正在初始化...';
   String _selectedImagePath = '';
 
@@ -131,6 +133,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   @override
   void dispose() {
     _textController.dispose();
+    _composerFocus.dispose();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     _speakingSubscription?.cancel();
@@ -319,6 +322,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _identity = null;
       _needsActivation = true;
       _selectedImagePath = '';
+      _quotedMessage = null;
       _myAvatarPath = '';
       _agentAvatarPath = '';
       _backgroundPath = '';
@@ -453,6 +457,21 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  void _quoteMessage(ChatMessage message) {
+    setState(() {
+      _quotedMessage = message;
+      _statusText = '引用了一条消息';
+    });
+    _composerFocus.requestFocus();
+  }
+
+  String _composeQuotedText(ChatMessage quote, String body) {
+    final sender = quote.role == ChatRole.user ? '我' : 'AIAgent';
+    final raw = quote.text.replaceAll('\n', ' ').trim();
+    final snippet = raw.length > 60 ? '${raw.substring(0, 60)}…' : raw;
+    return '> [$sender] $snippet\n\n$body';
+  }
+
   Future<void> _sendMessage() async {
     final rawText = _textController.text.trim();
     final identity = _identity;
@@ -464,7 +483,9 @@ class _ChatHomePageState extends State<ChatHomePage>
       return;
     }
 
-    final text = rawText.isEmpty ? '请看看这张图片。' : rawText;
+    final baseText = rawText.isEmpty ? '请看看这张图片。' : rawText;
+    final quote = _quotedMessage;
+    final text = quote == null ? baseText : _composeQuotedText(quote, baseText);
     final message = ChatMessage.user(
       text: text,
       imagePath: imagePath,
@@ -476,6 +497,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _messages = [..._messages, message];
       _textController.clear();
       _selectedImagePath = '';
+      _quotedMessage = null;
       _sending = true;
       _statusText = imagePath.isEmpty ? '正在发送...' : '正在发送图片...';
     });
@@ -1089,6 +1111,9 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
     setState(() {
       _messages = next;
+      if (_quotedMessage == message) {
+        _quotedMessage = null;
+      }
       _statusText = '已删除消息';
     });
     await _historyStore.save(next);
@@ -1380,6 +1405,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _messages = [];
 
       _selectedImagePath = '';
+      _quotedMessage = null;
       _statusText = '聊天历史已清空';
     });
   }
@@ -1476,6 +1502,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                         playingAudioKey: _playingAudioKey,
                         onPlayAudio: _playMessageAudio,
                         onDelete: _deleteMessage,
+                        onQuote: _quoteMessage,
                         onRetry: _retryMessage,
                         onFeedback: _sendFeedback,
                       ),
@@ -1497,6 +1524,18 @@ class _ChatHomePageState extends State<ChatHomePage>
                 ),
                 _InputBar(
                   controller: _textController,
+                  focusNode: _composerFocus,
+                  quotedText: _quotedMessage?.text ?? '',
+                  quotedSender: _quotedMessage == null
+                      ? ''
+                      : (_quotedMessage!.role == ChatRole.user
+                            ? '我'
+                            : 'AIAgent'),
+                  onCancelQuote: () {
+                    setState(() {
+                      _quotedMessage = null;
+                    });
+                  },
                   sending: _sending,
                   recording: _recording,
                   selectedImagePath: _selectedImagePath,
@@ -1740,6 +1779,7 @@ class _MessageList extends StatelessWidget {
     required this.onRetry,
     required this.onFeedback,
     required this.onDelete,
+    required this.onQuote,
   });
 
   final List<ChatMessage> messages;
@@ -1753,6 +1793,7 @@ class _MessageList extends StatelessWidget {
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
   final ValueChanged<ChatMessage> onDelete;
+  final ValueChanged<ChatMessage> onQuote;
 
   static bool _sameDay(DateTime a, DateTime b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
@@ -1795,6 +1836,7 @@ class _MessageList extends StatelessWidget {
           onRetry: onRetry,
           onFeedback: onFeedback,
           onDelete: onDelete,
+          onQuote: onQuote,
         );
       },
     );
@@ -1946,6 +1988,7 @@ class _MessageBubble extends StatelessWidget {
     required this.onRetry,
     required this.onFeedback,
     required this.onDelete,
+    required this.onQuote,
   });
 
   final ChatMessage message;
@@ -1959,6 +2002,7 @@ class _MessageBubble extends StatelessWidget {
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
   final ValueChanged<ChatMessage> onDelete;
+  final ValueChanged<ChatMessage> onQuote;
 
   @override
   Widget build(BuildContext context) {
@@ -1989,6 +2033,8 @@ class _MessageBubble extends StatelessWidget {
         (message.status == ChatMessageStatus.queued ||
             message.status == ChatMessageStatus.failed);
     final imagePath = message.imagePath;
+    final quoted = _splitQuote(message.text);
+    final bodyText = quoted?.body ?? message.text;
     final feedbackKey = message.requestId.isNotEmpty
         ? message.requestId
         : message.clientMessageId;
@@ -2008,6 +2054,7 @@ class _MessageBubble extends StatelessWidget {
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
           onDelete: onDelete,
+          onQuote: onQuote,
         );
       },
       child: Container(
@@ -2034,6 +2081,37 @@ class _MessageBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (quoted != null) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isUser
+                      ? Colors.white.withValues(alpha: 0.16)
+                      : Colors.black.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border(
+                    left: BorderSide(
+                      color: isUser ? Colors.white70 : const Color(0xFFC74444),
+                      width: 2,
+                    ),
+                  ),
+                ),
+                child: Text(
+                  quoted.quote,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.35,
+                    color: isUser
+                        ? Colors.white.withValues(alpha: 0.82)
+                        : Colors.black54,
+                  ),
+                ),
+              ),
+              if (imagePath.isNotEmpty || bodyText.trim().isNotEmpty)
+                const SizedBox(height: 6),
+            ],
             if (imagePath.isNotEmpty) ...[
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
@@ -2056,11 +2134,11 @@ class _MessageBubble extends StatelessWidget {
                   ),
                 ),
               ),
-              if (message.text.trim().isNotEmpty) const SizedBox(height: 6),
+              if (bodyText.trim().isNotEmpty) const SizedBox(height: 6),
             ],
-            if (message.text.trim().isNotEmpty)
+            if (bodyText.trim().isNotEmpty)
               Text(
-                message.text,
+                bodyText,
                 style: TextStyle(
                   fontSize: 15,
                   height: 1.42,
@@ -2250,6 +2328,23 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 
+  ({String quote, String body})? _splitQuote(String text) {
+    final lines = text.split('\n');
+    if (lines.isEmpty || !lines.first.startsWith('> ')) {
+      return null;
+    }
+    final quoteLines = <String>[];
+    var index = 0;
+    while (index < lines.length && lines[index].startsWith('> ')) {
+      quoteLines.add(lines[index].substring(2));
+      index += 1;
+    }
+    while (index < lines.length && lines[index].trim().isEmpty) {
+      index += 1;
+    }
+    return (quote: quoteLines.join('\n'), body: lines.skip(index).join('\n'));
+  }
+
   void _openImageViewer(BuildContext context, String path) {
     showDialog<void>(
       context: context,
@@ -2352,6 +2447,10 @@ class _MessageBubble extends StatelessWidget {
 class _InputBar extends StatelessWidget {
   const _InputBar({
     required this.controller,
+    required this.focusNode,
+    required this.quotedText,
+    required this.quotedSender,
+    required this.onCancelQuote,
     required this.sending,
     required this.recording,
     required this.selectedImagePath,
@@ -2363,6 +2462,10 @@ class _InputBar extends StatelessWidget {
   });
 
   final TextEditingController controller;
+  final FocusNode focusNode;
+  final String quotedText;
+  final String quotedSender;
+  final VoidCallback onCancelQuote;
   final bool sending;
   final bool recording;
   final String selectedImagePath;
@@ -2386,6 +2489,14 @@ class _InputBar extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (quotedText.isNotEmpty) ...[
+                _QuotedPreview(
+                  sender: quotedSender,
+                  text: quotedText,
+                  onCancel: onCancelQuote,
+                ),
+                const SizedBox(height: 8),
+              ],
               if (selectedImagePath.isNotEmpty) ...[
                 _SelectedImagePreview(
                   imagePath: selectedImagePath,
@@ -2421,6 +2532,7 @@ class _InputBar extends StatelessWidget {
                   Expanded(
                     child: TextField(
                       controller: controller,
+                      focusNode: focusNode,
                       minLines: 1,
                       maxLines: 4,
                       enabled: !recording,
@@ -2491,6 +2603,66 @@ class _InputBar extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _QuotedPreview extends StatelessWidget {
+  const _QuotedPreview({
+    required this.sender,
+    required this.text,
+    required this.onCancel,
+  });
+
+  final String sender;
+  final String text;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final singleLine = text.replaceAll('\n', ' ').trim();
+    return Container(
+      padding: const EdgeInsets.only(left: 10, top: 6, bottom: 6, right: 2),
+      decoration: const BoxDecoration(
+        color: Color(0xFFF7F7F7),
+        border: Border(left: BorderSide(color: Color(0xFFC74444), width: 3)),
+        borderRadius: BorderRadius.only(
+          topRight: Radius.circular(8),
+          bottomRight: Radius.circular(8),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  sender,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFC74444),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  singleLine,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(fontSize: 12, color: Colors.black54),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: '取消引用',
+            onPressed: onCancel,
+            iconSize: 18,
+            icon: const Icon(Icons.close),
+          ),
+        ],
       ),
     );
   }
