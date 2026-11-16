@@ -1189,6 +1189,14 @@ class _ChatHomePageState extends State<ChatHomePage>
         .toList();
   }
 
+  void _applySuggestion(String prompt) {
+    _textController.text = prompt;
+    _textController.selection = TextSelection.collapsed(
+      offset: prompt.length,
+    );
+    _composerFocus.requestFocus();
+  }
+
   void _startSelection(ChatMessage message) {
     _composerFocus.unfocus();
     setState(() {
@@ -2152,6 +2160,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                           onQuote: _quoteMessage,
                           onSelect: _startSelection,
                           onToggleSelect: _toggleSelection,
+                          onSuggestionSelected: _applySuggestion,
                           onRetry: _retryMessage,
                           onFeedback: _sendFeedback,
                         ),
@@ -2674,6 +2683,7 @@ class _MessageList extends StatelessWidget {
     required this.onQuote,
     required this.onSelect,
     required this.onToggleSelect,
+    required this.onSuggestionSelected,
   });
 
   final List<ChatMessage> messages;
@@ -2703,6 +2713,7 @@ class _MessageList extends StatelessWidget {
   final ValueChanged<ChatMessage> onQuote;
   final ValueChanged<ChatMessage> onSelect;
   final ValueChanged<ChatMessage> onToggleSelect;
+  final ValueChanged<String> onSuggestionSelected;
 
   static bool _sameDay(DateTime a, DateTime b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
@@ -2711,7 +2722,10 @@ class _MessageList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (messages.isEmpty) {
-      return _EmptyChatView(agentAvatarPath: agentAvatarPath);
+      return _EmptyChatView(
+        agentAvatarPath: agentAvatarPath,
+        onSuggestionSelected: onSuggestionSelected,
+      );
     }
     return ScrollablePositionedList.builder(
       itemScrollController: itemScrollController,
@@ -2775,37 +2789,70 @@ class _MessageList extends StatelessWidget {
 }
 
 class _EmptyChatView extends StatelessWidget {
-  const _EmptyChatView({required this.agentAvatarPath});
+  const _EmptyChatView({
+    required this.agentAvatarPath,
+    required this.onSuggestionSelected,
+  });
 
   final String agentAvatarPath;
+  final ValueChanged<String> onSuggestionSelected;
+
+  static const List<String> _suggestions = [
+    '今天想和你聊聊',
+    '帮我写一段自我介绍',
+    '用一句话解释量子纠缠',
+    '给我讲个冷笑话',
+    '推荐一部适合周末看的电影',
+  ];
 
   @override
   Widget build(BuildContext context) {
     return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _ChatAvatar(
-            label: '绫',
-            isUser: false,
-            size: 64,
-            imagePath: agentAvatarPath,
-          ),
-          const SizedBox(height: 16),
-          const Text(
-            '开始和 AIAgent 聊天吧',
-            style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-              color: Color(0xFF333333),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _ChatAvatar(
+              label: '绫',
+              isUser: false,
+              size: 64,
+              imagePath: agentAvatarPath,
             ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            '发送消息、图片或语音，阿绫会在这里回复你',
-            style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
-          ),
-        ],
+            const SizedBox(height: 16),
+            const Text(
+              '开始和 AIAgent 聊天吧',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF333333),
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '发送消息、图片或语音，阿绫会在这里回复你',
+              style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+            ),
+            const SizedBox(height: 22),
+            const Text(
+              '试试这样开始',
+              style: TextStyle(fontSize: 12, color: Color(0xFF888888)),
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final suggestion in _suggestions)
+                  ActionChip(
+                    label: Text(suggestion),
+                    onPressed: () => onSuggestionSelected(suggestion),
+                  ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
