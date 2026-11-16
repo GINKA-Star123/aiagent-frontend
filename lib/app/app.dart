@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:uuid/uuid.dart';
 
 import '../about/about_page.dart';
@@ -65,7 +66,11 @@ class ChatHomePage extends StatefulWidget {
 class _ChatHomePageState extends State<ChatHomePage>
     with WidgetsBindingObserver {
   final TextEditingController _textController = TextEditingController();
-  final ScrollController _scrollController = ScrollController();
+  final ItemScrollController _itemScrollController = ItemScrollController();
+  final ItemPositionsListener _itemPositionsListener =
+      ItemPositionsListener.create();
+  String _highlightedMessageKey = '';
+  Timer? _highlightTimer;
   final ImagePicker _imagePicker = ImagePicker();
 
   late ApiClient _apiClient;
@@ -132,7 +137,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     );
     WidgetsBinding.instance.addObserver(this);
     _textController.addListener(_onDraftChanged);
-    _scrollController.addListener(_handleScroll);
+    _itemPositionsListener.itemPositions.addListener(_handlePositions);
     _initConnectivity();
     _bootstrap();
   }
@@ -143,8 +148,8 @@ class _ChatHomePageState extends State<ChatHomePage>
     _textController.dispose();
     _draftTimer?.cancel();
     _composerFocus.dispose();
-    _scrollController.removeListener(_handleScroll);
-    _scrollController.dispose();
+    _itemPositionsListener.itemPositions.removeListener(_handlePositions);
+    _highlightTimer?.cancel();
     _speakingSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _connectivitySub?.cancel();
@@ -1218,12 +1223,27 @@ class _ChatHomePageState extends State<ChatHomePage>
     });
   }
 
-  void _handleScroll() {
-    if (!_scrollController.hasClients || !mounted) {
+  void _handlePositions() {
+    if (!mounted) {
       return;
     }
-    final position = _scrollController.position;
-    final show = position.maxScrollExtent - position.pixels > 240;
+    if (_messages.isEmpty) {
+      if (_showJumpToBottom) {
+        setState(() {
+          _showJumpToBottom = false;
+        });
+      }
+      return;
+    }
+    final positions = _itemPositionsListener.itemPositions.value;
+    if (positions.isEmpty) {
+      return;
+    }
+    final lastIndex = _messages.length - 1;
+    final lastVisible = positions.any(
+      (position) => position.index >= lastIndex,
+    );
+    final show = !lastVisible;
     if (show == _showJumpToBottom) {
       return;
     }
@@ -1232,12 +1252,24 @@ class _ChatHomePageState extends State<ChatHomePage>
     });
   }
 
+  int get _typingItemIndex {
+    if (_sending &&
+        !_recording &&
+        _messages.isNotEmpty &&
+        _messages.last.role == ChatRole.user) {
+      return _messages.length;
+    }
+    return -1;
+  }
+
   void _jumpToBottom() {
-    if (!_scrollController.hasClients) {
+    if (!_itemScrollController.isAttached || _messages.isEmpty) {
       return;
     }
-    _scrollController.animateTo(
-      _scrollController.position.maxScrollExtent,
+    final typingIndex = _typingItemIndex;
+    final index = typingIndex >= 0 ? typingIndex : _messages.length - 1;
+    _itemScrollController.scrollTo(
+      index: index,
       duration: const Duration(milliseconds: 240),
       curve: Curves.easeOut,
     );
@@ -1245,11 +1277,13 @@ class _ChatHomePageState extends State<ChatHomePage>
 
   void _scrollToBottomLater() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) {
+      if (!_itemScrollController.isAttached || _messages.isEmpty) {
         return;
       }
-      _scrollController.animateTo(
-        _scrollController.position.maxScrollExtent,
+      final typingIndex = _typingItemIndex;
+      final index = typingIndex >= 0 ? typingIndex : _messages.length - 1;
+      _itemScrollController.scrollTo(
+        index: index,
         duration: const Duration(milliseconds: 220),
         curve: Curves.easeOut,
       );
@@ -1302,11 +1336,43 @@ class _ChatHomePageState extends State<ChatHomePage>
   }
 
   Future<void> _openChatSearch() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute<void>(
+    final selected = await Navigator.of(context).push<ChatMessage>(
+      MaterialPageRoute<ChatMessage>(
         builder: (context) => ChatSearchPage(messages: _messages),
       ),
     );
+    if (!mounted || selected == null) {
+      return;
+    }
+    var index = _messages.indexWhere((message) => identical(message, selected));
+    if (index < 0 && selected.clientMessageId.isNotEmpty) {
+      index = _messages.indexWhere(
+        (message) => message.clientMessageId == selected.clientMessageId,
+      );
+    }
+    if (index < 0) {
+      return;
+    }
+    setState(() {
+      _highlightedMessageKey = _messageKey(selected);
+    });
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _highlightedMessageKey = '';
+      });
+    });
+    if (_itemScrollController.isAttached) {
+      await _itemScrollController.scrollTo(
+        index: index,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOut,
+        alignment: 0.3,
+      );
+    }
   }
 
   Future<void> _openSettingsPage() async {
@@ -1557,7 +1623,9 @@ class _ChatHomePageState extends State<ChatHomePage>
                     children: [
                       _MessageList(
                         messages: _messages,
-                        controller: _scrollController,
+                        itemScrollController: _itemScrollController,
+                        itemPositionsListener: _itemPositionsListener,
+                        highlightedMessageKey: _highlightedMessageKey,
                         feedback: _feedback,
                         fontSize: _chatFontSize,
                         myAvatarPath: _myAvatarPath,
@@ -1850,7 +1918,9 @@ class _ChatAvatar extends StatelessWidget {
 class _MessageList extends StatelessWidget {
   const _MessageList({
     required this.messages,
-    required this.controller,
+    required this.itemScrollController,
+    required this.itemPositionsListener,
+    required this.highlightedMessageKey,
     required this.feedback,
     required this.fontSize,
     required this.myAvatarPath,
@@ -1865,7 +1935,9 @@ class _MessageList extends StatelessWidget {
   });
 
   final List<ChatMessage> messages;
-  final ScrollController controller;
+  final ItemScrollController itemScrollController;
+  final ItemPositionsListener itemPositionsListener;
+  final String highlightedMessageKey;
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
   final String myAvatarPath;
@@ -1887,8 +1959,9 @@ class _MessageList extends StatelessWidget {
     if (messages.isEmpty) {
       return _EmptyChatView(agentAvatarPath: agentAvatarPath);
     }
-    return ListView.builder(
-      controller: controller,
+    return ScrollablePositionedList.builder(
+      itemScrollController: itemScrollController,
+      itemPositionsListener: itemPositionsListener,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
       itemCount: messages.length + (typing ? 1 : 0),
       itemBuilder: (context, index) {
@@ -1907,10 +1980,16 @@ class _MessageList extends StatelessWidget {
             previous.role == message.role &&
             message.createdAt.difference(previous.createdAt).inMinutes.abs() <
                 3;
+        final messageKey = message.requestId.isNotEmpty
+            ? message.requestId
+            : message.clientMessageId;
         return _MessageBubble(
           message: message,
           showTime: showTime,
           compact: compact,
+          highlighted:
+              highlightedMessageKey.isNotEmpty &&
+              highlightedMessageKey == messageKey,
           feedback: feedback,
           fontSize: fontSize,
           myAvatarPath: myAvatarPath,
@@ -2064,6 +2143,7 @@ class _MessageBubble extends StatelessWidget {
     required this.message,
     required this.showTime,
     required this.compact,
+    required this.highlighted,
     required this.feedback,
     required this.fontSize,
     required this.myAvatarPath,
@@ -2079,6 +2159,7 @@ class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final bool showTime;
   final bool compact;
+  final bool highlighted;
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
   final String myAvatarPath;
@@ -2150,6 +2231,9 @@ class _MessageBubble extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: BoxDecoration(
           color: isUser ? const Color(0xFFC74444) : Colors.white,
+          border: highlighted
+              ? Border.all(color: const Color(0xFFFFB300), width: 1.5)
+              : null,
           borderRadius: BorderRadius.only(
             topLeft: Radius.circular(isUser ? 14 : 4),
             topRight: Radius.circular(isUser ? 4 : 14),

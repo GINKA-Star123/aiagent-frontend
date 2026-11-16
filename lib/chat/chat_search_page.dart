@@ -82,7 +82,15 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
           children: [
             Icon(Icons.search, size: 48, color: Color(0xFFBBBBBB)),
             SizedBox(height: 12),
-            Text('输入关键字搜索聊天记录', style: TextStyle(color: Color(0xFF999999))),
+            Text(
+              '输入关键字搜索聊天记录',
+              style: TextStyle(color: Color(0xFF999999)),
+            ),
+            SizedBox(height: 6),
+            Text(
+              '点击结果跳转到原消息，长按查看全文',
+              style: TextStyle(fontSize: 12, color: Color(0xFFAAAAAA)),
+            ),
           ],
         ),
       );
@@ -147,7 +155,8 @@ class _ChatSearchPageState extends State<ChatSearchPage> {
                 query: _query.trim(),
               ),
             ),
-            onTap: () => _showDetail(message),
+            onTap: () => Navigator.of(context).pop(message),
+            onLongPress: () => _showDetail(message),
           ),
         );
       },
