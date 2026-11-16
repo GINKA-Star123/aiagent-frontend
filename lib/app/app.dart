@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -107,6 +108,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _recording = false;
   bool _autoPlayVoice = true;
   bool _openingRequested = false;
+  bool _showJumpToBottom = false;
   String _statusText = '正在初始化...';
   String _selectedImagePath = '';
 
@@ -119,6 +121,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _handleSpeakingChanged,
     );
     WidgetsBinding.instance.addObserver(this);
+    _scrollController.addListener(_handleScroll);
     _initConnectivity();
     _bootstrap();
   }
@@ -126,6 +129,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   @override
   void dispose() {
     _textController.dispose();
+    _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
     _speakingSubscription?.cancel();
     WidgetsBinding.instance.removeObserver(this);
@@ -1078,6 +1082,31 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  void _handleScroll() {
+    if (!_scrollController.hasClients || !mounted) {
+      return;
+    }
+    final position = _scrollController.position;
+    final show = position.maxScrollExtent - position.pixels > 240;
+    if (show == _showJumpToBottom) {
+      return;
+    }
+    setState(() {
+      _showJumpToBottom = show;
+    });
+  }
+
+  void _jumpToBottom() {
+    if (!_scrollController.hasClients) {
+      return;
+    }
+    _scrollController.animateTo(
+      _scrollController.position.maxScrollExtent,
+      duration: const Duration(milliseconds: 240),
+      curve: Curves.easeOut,
+    );
+  }
+
   void _scrollToBottomLater() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_scrollController.hasClients) {
@@ -1352,15 +1381,37 @@ class _ChatHomePageState extends State<ChatHomePage>
                   onStopAudio: _audioPlaybackService.stop,
                 ),
                 Expanded(
-                  child: _MessageList(
-                    messages: _messages,
-                    controller: _scrollController,
-                    feedback: _feedback,
-                    myAvatarPath: _myAvatarPath,
-                    agentAvatarPath: _agentAvatarPath,
-                    onPlayAudio: _playMessageAudio,
-                    onRetry: _retryMessage,
-                    onFeedback: _sendFeedback,
+                  child: Stack(
+                    children: [
+                      _MessageList(
+                        messages: _messages,
+                        controller: _scrollController,
+                        feedback: _feedback,
+                        myAvatarPath: _myAvatarPath,
+                        agentAvatarPath: _agentAvatarPath,
+                        typing:
+                            _sending &&
+                            !_recording &&
+                            _messages.isNotEmpty &&
+                            _messages.last.role == ChatRole.user,
+                        onPlayAudio: _playMessageAudio,
+                        onRetry: _retryMessage,
+                        onFeedback: _sendFeedback,
+                      ),
+                      if (_showJumpToBottom)
+                        Positioned(
+                          right: 12,
+                          bottom: 12,
+                          child: FloatingActionButton.small(
+                            heroTag: null,
+                            backgroundColor: Colors.white,
+                            foregroundColor: const Color(0xFF666666),
+                            elevation: 2,
+                            onPressed: _jumpToBottom,
+                            child: const Icon(Icons.keyboard_arrow_down),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 _InputBar(
@@ -1595,6 +1646,7 @@ class _MessageList extends StatelessWidget {
     required this.feedback,
     required this.myAvatarPath,
     required this.agentAvatarPath,
+    required this.typing,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
@@ -1605,9 +1657,14 @@ class _MessageList extends StatelessWidget {
   final Map<String, Map<String, dynamic>> feedback;
   final String myAvatarPath;
   final String agentAvatarPath;
+  final bool typing;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
+
+  static bool _sameDay(DateTime a, DateTime b) {
+    return a.year == b.year && a.month == b.month && a.day == b.day;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1617,14 +1674,18 @@ class _MessageList extends StatelessWidget {
     return ListView.builder(
       controller: controller,
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
-      itemCount: messages.length,
+      itemCount: messages.length + (typing ? 1 : 0),
       itemBuilder: (context, index) {
+        if (index >= messages.length) {
+          return _TypingIndicator(agentAvatarPath: agentAvatarPath);
+        }
         final message = messages[index];
         final previous = index > 0 ? messages[index - 1] : null;
         final showTime =
             previous == null ||
             message.createdAt.difference(previous.createdAt).inMinutes.abs() >=
-                5;
+                5 ||
+            !_sameDay(previous.createdAt, message.createdAt);
         return _MessageBubble(
           message: message,
           showTime: showTime,
@@ -1674,6 +1735,101 @@ class _EmptyChatView extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _TypingIndicator extends StatefulWidget {
+  const _TypingIndicator({required this.agentAvatarPath});
+
+  final String agentAvatarPath;
+
+  @override
+  State<_TypingIndicator> createState() => _TypingIndicatorState();
+}
+
+class _TypingIndicatorState extends State<_TypingIndicator>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 6, bottom: 10),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _ChatAvatar(
+            label: '绫',
+            isUser: false,
+            size: 36,
+            imagePath: widget.agentAvatarPath,
+          ),
+          const SizedBox(width: 8),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(4),
+                topRight: Radius.circular(14),
+                bottomLeft: Radius.circular(14),
+                bottomRight: Radius.circular(14),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 6,
+                  offset: const Offset(0, 2),
+                ),
+              ],
+            ),
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (context, child) {
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    for (var index = 0; index < 3; index++) ...[
+                      if (index > 0) const SizedBox(width: 5),
+                      Opacity(
+                        opacity: _dotOpacity(index),
+                        child: Container(
+                          width: 7,
+                          height: 7,
+                          decoration: const BoxDecoration(
+                            color: Color(0xFF999999),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(width: 10),
+                    const Text(
+                      '正在输入',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  double _dotOpacity(int index) {
+    final phase = (_controller.value + index * 0.18) % 1.0;
+    return 0.35 + 0.65 * (0.5 + 0.5 * math.sin(phase * 2 * math.pi));
   }
 }
 
@@ -1773,20 +1929,23 @@ class _MessageBubble extends StatelessWidget {
             if (imagePath.isNotEmpty) ...[
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.file(
-                  File(imagePath),
-                  width: 220,
-                  height: 160,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      width: 220,
-                      height: 80,
-                      alignment: Alignment.center,
-                      color: const Color(0xFFF2F2F2),
-                      child: const Text('图片无法显示'),
-                    );
-                  },
+                child: GestureDetector(
+                  onTap: () => _openImageViewer(context, imagePath),
+                  child: Image.file(
+                    File(imagePath),
+                    width: 220,
+                    height: 160,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return Container(
+                        width: 220,
+                        height: 80,
+                        alignment: Alignment.center,
+                        color: const Color(0xFFF2F2F2),
+                        child: const Text('图片无法显示'),
+                      );
+                    },
+                  ),
                 ),
               ),
               if (message.text.trim().isNotEmpty) const SizedBox(height: 6),
@@ -1911,12 +2070,25 @@ class _MessageBubble extends StatelessWidget {
         children: [
           if (showTime) ...[
             Center(
-              child: Text(
-                _formatTime(message.createdAt),
-                style: const TextStyle(fontSize: 11, color: Color(0xFFAAAAAA)),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 3,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Text(
+                  _formatTime(message.createdAt),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF888888),
+                  ),
+                ),
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 8),
           ],
           Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1957,16 +2129,69 @@ class _MessageBubble extends StatelessWidget {
     );
   }
 
+  void _openImageViewer(BuildContext context, String path) {
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black87,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          insetPadding: const EdgeInsets.all(12),
+          child: Stack(
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxWidth: MediaQuery.sizeOf(dialogContext).width - 24,
+                  maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.8,
+                ),
+                child: InteractiveViewer(
+                  child: Image.file(
+                    File(path),
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text(
+                          '图片无法显示',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 0,
+                right: 0,
+                child: IconButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  icon: const Icon(Icons.close, color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   String _formatTime(DateTime value) {
     final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final day = DateTime(value.year, value.month, value.day);
     final hm =
         '${value.hour.toString().padLeft(2, '0')}:${value.minute.toString().padLeft(2, '0')}';
-    if (now.year == value.year &&
-        now.month == value.month &&
-        now.day == value.day) {
-      return hm;
+    final diff = today.difference(day).inDays;
+    if (diff == 0) {
+      return '今天 $hm';
     }
-    return '${value.month}/${value.day} $hm';
+    if (diff == 1) {
+      return '昨天 $hm';
+    }
+    if (value.year == now.year) {
+      return '${value.month}月${value.day}日 $hm';
+    }
+    return '${value.year}年${value.month}月${value.day}日 $hm';
   }
 
   Future<void> _showFeedbackTags(BuildContext context) async {
@@ -2107,27 +2332,38 @@ class _InputBar extends StatelessWidget {
                     tooltip: recording ? '停止录音' : '语音输入',
                   ),
                   const SizedBox(width: 2),
-                  SizedBox(
-                    width: 40,
-                    height: 40,
-                    child: FilledButton(
-                      onPressed: sending || recording ? null : onSend,
-                      style: FilledButton.styleFrom(
-                        padding: EdgeInsets.zero,
-                        shape: const CircleBorder(),
-                        backgroundColor: const Color(0xFFC74444),
-                      ),
-                      child: sending && !recording
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(Icons.send_rounded, size: 20),
-                    ),
+                  ValueListenableBuilder<TextEditingValue>(
+                    valueListenable: controller,
+                    builder: (context, value, child) {
+                      final hasContent =
+                          value.text.trim().isNotEmpty ||
+                          selectedImagePath.isNotEmpty;
+                      final canSend = hasContent && !sending && !recording;
+                      return SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: FilledButton(
+                          onPressed: canSend ? onSend : null,
+                          style: FilledButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            shape: const CircleBorder(),
+                            backgroundColor: const Color(0xFFC74444),
+                            disabledBackgroundColor: const Color(0xFFE0E0E0),
+                            disabledForegroundColor: const Color(0xFF9E9E9E),
+                          ),
+                          child: sending && !recording
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Icon(Icons.send_rounded, size: 20),
+                        ),
+                      );
+                    },
                   ),
                 ],
               ),
