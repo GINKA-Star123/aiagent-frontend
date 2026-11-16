@@ -28,6 +28,8 @@ import '../chat/chat_message.dart';
 import '../chat/memory_status.dart';
 import '../chat/chat_search_page.dart';
 import '../chat/draft_store.dart';
+import '../chat/favorite_store.dart';
+import '../chat/favorites_page.dart';
 import '../chat/message_actions.dart';
 import '../chat/unread_marker_store.dart';
 import '../connectivity/backend_status.dart';
@@ -2143,6 +2145,42 @@ class _ChatHomePageState extends State<ChatHomePage>
     );
   }
 
+  Future<void> _openFavorites() async {
+    final identity = _identity;
+    if (identity == null) {
+      return;
+    }
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => FavoritesPage(userId: identity.userId),
+      ),
+    );
+  }
+
+  Future<void> _toggleFavorite(ChatMessage message) async {
+    final identity = _identity;
+    if (identity == null) {
+      return;
+    }
+    final sender = message.role == ChatRole.user
+        ? '我'
+        : (message.role == ChatRole.system ? '系统' : 'AIAgent');
+    final favorite = FavoriteMessage(
+      key: _selectionKeyFor(message),
+      text: message.text,
+      sender: sender,
+      createdAt: message.createdAt,
+      imagePath: message.imagePath,
+    );
+    final added = await FavoriteStore.toggle(identity.userId, favorite);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(added ? '已收藏' : '已取消收藏')));
+  }
+
   Future<void> _openSettingsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -2431,6 +2469,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                       onJumpUnread: _jumpToUnread,
                       onExportChat: _exportChat,
                       onChatStats: _showChatStats,
+                      onOpenFavorites: _openFavorites,
                       onCheckHealth: () => _checkHealth(),
                       onStopAudio: _stopAudio,
                     ),
@@ -2450,6 +2489,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                           unreadMarkerKey: _unreadMarkerKey,
                           onToggleUnread: _toggleUnreadMarker,
                           onClearUnread: _clearUnreadMarker,
+                          onToggleFavorite: _toggleFavorite,
                           myAvatarPath: _myAvatarPath,
                           agentAvatarPath: _agentAvatarPath,
                           typing:
@@ -2748,6 +2788,7 @@ class _ChatHeader extends StatelessWidget {
     required this.onJumpUnread,
     required this.onExportChat,
     required this.onChatStats,
+    required this.onOpenFavorites,
     required this.onCheckHealth,
     required this.onStopAudio,
   });
@@ -2766,6 +2807,7 @@ class _ChatHeader extends StatelessWidget {
   final VoidCallback onJumpUnread;
   final VoidCallback onExportChat;
   final VoidCallback onChatStats;
+  final VoidCallback onOpenFavorites;
   final VoidCallback onCheckHealth;
   final VoidCallback onStopAudio;
 
@@ -2865,6 +2907,8 @@ class _ChatHeader extends StatelessWidget {
                 onExportChat();
               } else if (value == 'stats') {
                 onChatStats();
+              } else if (value == 'favorites') {
+                onOpenFavorites();
               } else if (value == 'settings') {
                 onOpenSettings();
               }
@@ -2882,6 +2926,10 @@ class _ChatHeader extends StatelessWidget {
                 ),
               const PopupMenuItem<String>(value: 'export', child: Text('导出聊天')),
               const PopupMenuItem<String>(value: 'stats', child: Text('聊天统计')),
+              const PopupMenuItem<String>(
+                value: 'favorites',
+                child: Text('收藏夹'),
+              ),
               if (speaking)
                 const PopupMenuItem<String>(value: 'stop', child: Text('停止语音')),
               const PopupMenuItem<String>(value: 'settings', child: Text('设置')),
@@ -3075,6 +3123,7 @@ class _MessageList extends StatelessWidget {
     required this.unreadMarkerKey,
     required this.onToggleUnread,
     required this.onClearUnread,
+    required this.onToggleFavorite,
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.typing,
@@ -3110,6 +3159,7 @@ class _MessageList extends StatelessWidget {
   final String unreadMarkerKey;
   final ValueChanged<ChatMessage> onToggleUnread;
   final VoidCallback onClearUnread;
+  final ValueChanged<ChatMessage> onToggleFavorite;
   final String myAvatarPath;
   final String agentAvatarPath;
   final bool typing;
@@ -3182,6 +3232,7 @@ class _MessageList extends StatelessWidget {
               unreadMarkerKey == _selectionKeyFor(message),
           onToggleUnread: onToggleUnread,
           onClearUnread: onClearUnread,
+          onToggleFavorite: onToggleFavorite,
           highlighted:
               highlightedMessageKey.isNotEmpty &&
               highlightedMessageKey == messageKey,
@@ -3637,6 +3688,7 @@ class _MessageBubble extends StatelessWidget {
     required this.showUnreadMarker,
     required this.onToggleUnread,
     required this.onClearUnread,
+    required this.onToggleFavorite,
     required this.highlighted,
     required this.feedback,
     required this.fontSize,
@@ -3670,6 +3722,7 @@ class _MessageBubble extends StatelessWidget {
   final bool showUnreadMarker;
   final ValueChanged<ChatMessage> onToggleUnread;
   final VoidCallback onClearUnread;
+  final ValueChanged<ChatMessage> onToggleFavorite;
   final bool highlighted;
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
@@ -3754,6 +3807,7 @@ class _MessageBubble extends StatelessWidget {
                 onSelect: onSelect,
                 onToggleUnread: onToggleUnread,
                 markedUnread: showUnreadMarker,
+                onToggleFavorite: onToggleFavorite,
               );
             },
       child: Container(

@@ -15,6 +15,7 @@ class MessageActions {
     ValueChanged<ChatMessage>? onQuote,
     ValueChanged<ChatMessage>? onSelect,
     ValueChanged<ChatMessage>? onToggleUnread,
+    ValueChanged<ChatMessage>? onToggleFavorite,
     bool markedUnread = false,
   }) async {
     final hasAudio = message.audioUrl.isNotEmpty;
@@ -47,6 +48,15 @@ class MessageActions {
                   onTap: () {
                     Navigator.of(context).pop();
                     onToggleUnread(message);
+                  },
+                ),
+              if (onToggleFavorite != null)
+                ListTile(
+                  leading: const Icon(Icons.bookmark_border),
+                  title: const Text('收藏消息'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    onToggleFavorite(message);
                   },
                 ),
               if (message.status == ChatMessageStatus.failed ||
