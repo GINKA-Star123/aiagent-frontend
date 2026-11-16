@@ -143,6 +143,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   double _chatFontSize = AppPreferences.defaultChatFontSize;
   bool _compactAvatars = false;
   double _audioSpeed = 1.0;
+  bool _suggestionAutoSend = false;
   Timer? _draftTimer;
   bool _openingRequested = false;
   bool _showJumpToBottom = false;
@@ -214,6 +215,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     _preferences = await AppPreferences.load();
     _chatFontSize = _preferences.chatFontSize;
     _audioSpeed = _preferences.audioSpeed;
+    _suggestionAutoSend = _preferences.suggestionAutoSend;
     unawaited(_audioPlaybackService.setPlaybackRate(_audioSpeed));
 
     final storedCode = await _sessionStore.loadActivationCode();
@@ -310,6 +312,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _chatFontSize = _preferences.chatFontSize;
       _compactAvatars = _preferences.compactAvatars;
       _audioSpeed = _preferences.audioSpeed;
+      _suggestionAutoSend = _preferences.suggestionAutoSend;
       if (draft.isNotEmpty) {
         _textController.text = draft;
         _textController.selection = TextSelection.collapsed(
@@ -1214,7 +1217,11 @@ class _ChatHomePageState extends State<ChatHomePage>
   void _applySuggestion(String prompt) {
     _textController.text = prompt;
     _textController.selection = TextSelection.collapsed(offset: prompt.length);
-    _composerFocus.requestFocus();
+    if (_suggestionAutoSend) {
+      unawaited(_sendMessage());
+    } else {
+      _composerFocus.requestFocus();
+    }
   }
 
   bool get _allMessagesSelected {
@@ -1791,6 +1798,16 @@ class _ChatHomePageState extends State<ChatHomePage>
     });
   }
 
+  Future<void> _setSuggestionAutoSend(bool value) async {
+    await _preferences.setSuggestionAutoSend(value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _suggestionAutoSend = value;
+    });
+  }
+
   Future<void> _setChatFontSize(double value) async {
     await _preferences.setChatFontSize(value);
     if (!mounted) {
@@ -2148,6 +2165,8 @@ class _ChatHomePageState extends State<ChatHomePage>
             onChatFontSizeChanged: _setChatFontSize,
             compactAvatars: _compactAvatars,
             onCompactAvatarsChanged: _setCompactAvatars,
+            suggestionAutoSend: _suggestionAutoSend,
+            onSuggestionAutoSendChanged: _setSuggestionAutoSend,
             onSaveApiBaseUrl: _saveApiBaseUrl,
             onAutoPlayVoiceChanged: _setAutoPlayVoice,
             onOpenProfile: _openProfilePage,
@@ -4466,7 +4485,11 @@ class _RecordingBannerState extends State<_RecordingBanner> {
 
   @override
   Widget build(BuildContext context) {
-    final label = _armed ? '松手取消' : '正在录音  ${_formatDuration(widget.seconds)}';
+    final remaining = (60 - widget.seconds).clamp(0, 60).toInt();
+    final warning = remaining <= 10;
+    final label = _armed
+        ? '松手取消'
+        : '正在录音  ${_formatDuration(widget.seconds)} · 剩 ${_formatDuration(remaining)}';
     return GestureDetector(
       onVerticalDragUpdate: (details) {
         setState(() {
@@ -4518,9 +4541,11 @@ class _RecordingBannerState extends State<_RecordingBanner> {
                     children: [
                       Text(
                         label,
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 13,
-                          color: Color(0xFF9A2E2A),
+                          color: warning
+                              ? const Color(0xFFB3261E)
+                              : const Color(0xFF9A2E2A),
                           fontWeight: FontWeight.w600,
                         ),
                       ),

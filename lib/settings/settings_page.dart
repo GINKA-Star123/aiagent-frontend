@@ -27,6 +27,8 @@ class SettingsPage extends StatefulWidget {
     required this.onChatFontSizeChanged,
     required this.compactAvatars,
     required this.onCompactAvatarsChanged,
+    required this.suggestionAutoSend,
+    required this.onSuggestionAutoSendChanged,
     required this.onSaveApiBaseUrl,
     required this.onAutoPlayVoiceChanged,
     required this.onOpenProfile,
@@ -54,6 +56,8 @@ class SettingsPage extends StatefulWidget {
   final Future<void> Function(double value) onChatFontSizeChanged;
   final bool compactAvatars;
   final Future<void> Function(bool value) onCompactAvatarsChanged;
+  final bool suggestionAutoSend;
+  final Future<void> Function(bool value) onSuggestionAutoSendChanged;
   final Future<void> Function(String apiBaseUrl) onSaveApiBaseUrl;
   final Future<void> Function(bool value) onAutoPlayVoiceChanged;
   final VoidCallback onOpenProfile;
@@ -77,6 +81,7 @@ class _SettingsPageState extends State<SettingsPage> {
   late bool _autoPlayVoice;
   late double _chatFontSize;
   late bool _compactAvatars;
+  late bool _suggestionAutoSend;
   late String _myAvatarPath;
   late String _agentAvatarPath;
   late String _backgroundPath;
@@ -94,6 +99,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _autoPlayVoice = widget.autoPlayVoice;
     _chatFontSize = widget.chatFontSize;
     _compactAvatars = widget.compactAvatars;
+    _suggestionAutoSend = widget.suggestionAutoSend;
     _myAvatarPath = widget.myAvatarPath;
     _agentAvatarPath = widget.agentAvatarPath;
     _backgroundPath = widget.backgroundPath;
@@ -668,6 +674,20 @@ class _SettingsPageState extends State<SettingsPage> {
                     _compactAvatars = value;
                   });
                   widget.onCompactAvatarsChanged(value);
+                },
+              ),
+              const Divider(height: 20),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                secondary: const Icon(Icons.quickreply_outlined),
+                title: const Text('点击开场白直接发送'),
+                subtitle: const Text('关闭时点击只填入输入框'),
+                value: _suggestionAutoSend,
+                onChanged: (value) {
+                  setState(() {
+                    _suggestionAutoSend = value;
+                  });
+                  widget.onSuggestionAutoSendChanged(value);
                 },
               ),
               const Divider(height: 20),

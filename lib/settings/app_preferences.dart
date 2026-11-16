@@ -8,6 +8,7 @@ class AppPreferences {
   static const String _chatFontSizeKey = 'app.chat_font_size';
   static const String _compactAvatarsKey = 'app.compact_avatars';
   static const String _audioSpeedKey = 'app.audio_speed';
+  static const String _suggestionAutoSendKey = 'app.suggestion_auto_send';
   static const double defaultChatFontSize = 15;
 
   final SharedPreferences _prefs;
@@ -49,6 +50,14 @@ class AppPreferences {
 
   Future<void> setAudioSpeed(double value) async {
     await _prefs.setDouble(_audioSpeedKey, value.clamp(1.0, 2.0).toDouble());
+  }
+
+  bool get suggestionAutoSend {
+    return _prefs.getBool(_suggestionAutoSendKey) ?? false;
+  }
+
+  Future<void> setSuggestionAutoSend(bool value) async {
+    await _prefs.setBool(_suggestionAutoSendKey, value);
   }
 
   bool get onboardingCompleted {
