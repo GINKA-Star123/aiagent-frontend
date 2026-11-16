@@ -49,6 +49,7 @@ flutter pub get
 - 长期记忆按后端返回的 `user_id` 隔离；聊天历史、发件箱、反馈也已改为按 `user_id` 分区
 - 后端需设置 `AUTH_REGISTRATION_ENABLED=true`，并保持 `AUTH_INVITE_CODE` 为空（配置项，不需改代码）
 - 验证码发送不可用，可行性见 [docs/email-verification-feasibility.md](docs/email-verification-feasibility.md)
+- WSL 后端启动/隧道/排障指令见 [docs/wsl-backend-startup.md](docs/wsl-backend-startup.md)
 
 ## 2.0 功能总览
 
