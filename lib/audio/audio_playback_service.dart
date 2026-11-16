@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/foundation.dart';
 
 class AudioPlaybackService {
   AudioPlaybackService() {
@@ -11,12 +12,23 @@ class AudioPlaybackService {
 
     _player.onPlayerComplete.listen((_) {
       _speakingController.add(false);
+      position.value = Duration.zero;
+    });
+
+    _player.onPositionChanged.listen((value) {
+      position.value = value;
+    });
+
+    _player.onDurationChanged.listen((value) {
+      duration.value = value;
     });
   }
 
   final AudioPlayer _player = AudioPlayer();
   final StreamController<bool> _speakingController =
       StreamController<bool>.broadcast();
+  final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
+  final ValueNotifier<Duration> duration = ValueNotifier(Duration.zero);
 
   Stream<bool> get speakingStream => _speakingController.stream;
 
@@ -27,12 +39,15 @@ class AudioPlaybackService {
       return;
     }
 
+    position.value = Duration.zero;
+    duration.value = Duration.zero;
     await stop();
     await _player.play(UrlSource(normalizedUrl));
   }
 
   Future<void> stop() async {
     await _player.stop();
+    position.value = Duration.zero;
     _speakingController.add(false);
   }
 
@@ -48,5 +63,7 @@ class AudioPlaybackService {
   Future<void> dispose() async {
     await _player.dispose();
     await _speakingController.close();
+    position.dispose();
+    duration.dispose();
   }
 }

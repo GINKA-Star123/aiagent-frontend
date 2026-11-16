@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
@@ -1714,6 +1715,8 @@ class _ChatHomePageState extends State<ChatHomePage>
                             _messages.isNotEmpty &&
                             _messages.last.role == ChatRole.user,
                         playingAudioKey: _playingAudioKey,
+                        audioPosition: _audioPlaybackService.position,
+                        audioDuration: _audioPlaybackService.duration,
                         onOpenImage: _openImageViewer,
                         onPlayAudio: _playMessageAudio,
                         onDelete: _deleteMessage,
@@ -2109,6 +2112,8 @@ class _MessageList extends StatelessWidget {
     required this.agentAvatarPath,
     required this.typing,
     required this.playingAudioKey,
+    required this.audioPosition,
+    required this.audioDuration,
     required this.onOpenImage,
     required this.onPlayAudio,
     required this.onRetry,
@@ -2128,6 +2133,8 @@ class _MessageList extends StatelessWidget {
   final String agentAvatarPath;
   final bool typing;
   final String playingAudioKey;
+  final ValueListenable<Duration> audioPosition;
+  final ValueListenable<Duration> audioDuration;
   final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
@@ -2181,6 +2188,8 @@ class _MessageList extends StatelessWidget {
           myAvatarPath: myAvatarPath,
           agentAvatarPath: agentAvatarPath,
           playingAudioKey: playingAudioKey,
+          audioPosition: audioPosition,
+          audioDuration: audioDuration,
           onOpenImage: onOpenImage,
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
@@ -2350,6 +2359,8 @@ class _MessageBubble extends StatelessWidget {
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.playingAudioKey,
+    required this.audioPosition,
+    required this.audioDuration,
     required this.onOpenImage,
     required this.onPlayAudio,
     required this.onRetry,
@@ -2368,6 +2379,8 @@ class _MessageBubble extends StatelessWidget {
   final String myAvatarPath;
   final String agentAvatarPath;
   final String playingAudioKey;
+  final ValueListenable<Duration> audioPosition;
+  final ValueListenable<Duration> audioDuration;
   final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
@@ -2620,26 +2633,71 @@ class _MessageBubble extends StatelessWidget {
       ],
       if (hasAudio) ...[
         const SizedBox(height: 2),
-        TextButton.icon(
-          onPressed: () => onPlayAudio(message),
-          style: TextButton.styleFrom(
-            foregroundColor: playingAudioKey == feedbackKey
-                ? const Color(0xFFC74444)
-                : const Color(0xFF666666),
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            minimumSize: const Size(0, 30),
-            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-          ),
-          icon: Icon(
-            playingAudioKey == feedbackKey
-                ? Icons.stop_circle_outlined
-                : Icons.volume_up_outlined,
-            size: 16,
-          ),
-          label: Text(
-            playingAudioKey == feedbackKey ? '停止播放' : '播放语音',
-            style: const TextStyle(fontSize: 12),
-          ),
+        ValueListenableBuilder<Duration>(
+          valueListenable: audioPosition,
+          builder: (context, position, child) {
+            return ValueListenableBuilder<Duration>(
+              valueListenable: audioDuration,
+              builder: (context, duration, _) {
+                final isPlaying = playingAudioKey == feedbackKey;
+                final totalMs = duration.inMilliseconds;
+                final progress = isPlaying && totalMs > 0
+                    ? (position.inMilliseconds / totalMs)
+                          .clamp(0.0, 1.0)
+                          .toDouble()
+                    : 0.0;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    TextButton.icon(
+                      onPressed: () => onPlayAudio(message),
+                      style: TextButton.styleFrom(
+                        foregroundColor: isPlaying
+                            ? const Color(0xFFC74444)
+                            : const Color(0xFF666666),
+                        padding: const EdgeInsets.symmetric(horizontal: 8),
+                        minimumSize: const Size(0, 30),
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                      icon: Icon(
+                        isPlaying
+                            ? Icons.stop_circle_outlined
+                            : Icons.volume_up_outlined,
+                        size: 16,
+                      ),
+                      label: Text(
+                        isPlaying ? '停止播放' : '播放语音',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                    ),
+                    if (isPlaying && totalMs > 0) ...[
+                      const SizedBox(height: 2),
+                      SizedBox(
+                        width: 150,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(2),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 3,
+                            backgroundColor: const Color(0xFFE6E6E6),
+                            color: const Color(0xFFC74444),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '${_formatAudioTime(position)} / ${_formatAudioTime(duration)}',
+                        style: const TextStyle(
+                          fontSize: 10,
+                          color: Color(0xFF999999),
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              },
+            );
+          },
         ),
       ],
       if (message.role == ChatRole.assistant && feedbackKey.isNotEmpty) ...[
@@ -2760,6 +2818,12 @@ class _MessageBubble extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  String _formatAudioTime(Duration value) {
+    final minutes = value.inMinutes.toString().padLeft(2, '0');
+    final seconds = (value.inSeconds % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 
   ({String duration, String transcript})? _parseVoice(String text) {
