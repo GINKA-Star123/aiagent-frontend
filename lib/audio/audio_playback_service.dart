@@ -29,6 +29,9 @@ class AudioPlaybackService {
       StreamController<bool>.broadcast();
   final ValueNotifier<Duration> position = ValueNotifier(Duration.zero);
   final ValueNotifier<Duration> duration = ValueNotifier(Duration.zero);
+  double _playbackRate = 1.0;
+
+  double get playbackRate => _playbackRate;
 
   Stream<bool> get speakingStream => _speakingController.stream;
 
@@ -43,12 +46,26 @@ class AudioPlaybackService {
     duration.value = Duration.zero;
     await stop();
     await _player.play(UrlSource(normalizedUrl));
+    try {
+      await _player.setPlaybackRate(_playbackRate);
+    } catch (_) {
+      // 保持默认速率，避免影响播放。
+    }
   }
 
   Future<void> stop() async {
     await _player.stop();
     position.value = Duration.zero;
     _speakingController.add(false);
+  }
+
+  Future<void> setPlaybackRate(double rate) async {
+    _playbackRate = rate.clamp(1.0, 2.0).toDouble();
+    try {
+      await _player.setPlaybackRate(_playbackRate);
+    } catch (_) {
+      // 无音源时部分平台不允许设置速率，播放时会再次应用。
+    }
   }
 
   Future<void> seek(Duration position) async {

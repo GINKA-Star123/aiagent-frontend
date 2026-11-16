@@ -124,6 +124,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _autoPlayVoice = true;
   double _chatFontSize = AppPreferences.defaultChatFontSize;
   bool _compactAvatars = false;
+  double _audioSpeed = 1.0;
   Timer? _draftTimer;
   bool _openingRequested = false;
   bool _showJumpToBottom = false;
@@ -178,6 +179,8 @@ class _ChatHomePageState extends State<ChatHomePage>
     _feedbackStore = FeedbackStore();
     _preferences = await AppPreferences.load();
     _chatFontSize = _preferences.chatFontSize;
+    _audioSpeed = _preferences.audioSpeed;
+    unawaited(_audioPlaybackService.setPlaybackRate(_audioSpeed));
 
     final storedCode = await _sessionStore.loadActivationCode();
     final envCode = ActivationConfig.rawFromEnvironment();
@@ -272,6 +275,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _autoPlayVoice = _preferences.autoPlayVoice;
       _chatFontSize = _preferences.chatFontSize;
       _compactAvatars = _preferences.compactAvatars;
+      _audioSpeed = _preferences.audioSpeed;
       if (draft.isNotEmpty) {
         _textController.text = draft;
         _textController.selection = TextSelection.collapsed(
@@ -1234,6 +1238,20 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  Future<void> _cycleAudioSpeed() async {
+    const speeds = [1.0, 1.25, 1.5, 2.0];
+    final index = speeds.indexOf(_audioSpeed);
+    final next = speeds[(index + 1) % speeds.length];
+    await _preferences.setAudioSpeed(next);
+    await _audioPlaybackService.setPlaybackRate(next);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _audioSpeed = next;
+    });
+  }
+
   Future<void> _seekAudio(ChatMessage message, Duration position) async {
     if (_playingAudioKey != _messageKey(message)) {
       return;
@@ -1724,6 +1742,8 @@ class _ChatHomePageState extends State<ChatHomePage>
                         playingAudioKey: _playingAudioKey,
                         audioPosition: _audioPlaybackService.position,
                         audioDuration: _audioPlaybackService.duration,
+                        audioSpeed: _audioSpeed,
+                        onCycleAudioSpeed: _cycleAudioSpeed,
                         onSeekAudio: _seekAudio,
                         onOpenImage: _openImageViewer,
                         onPlayAudio: _playMessageAudio,
@@ -2122,6 +2142,8 @@ class _MessageList extends StatelessWidget {
     required this.playingAudioKey,
     required this.audioPosition,
     required this.audioDuration,
+    required this.audioSpeed,
+    required this.onCycleAudioSpeed,
     required this.onSeekAudio,
     required this.onOpenImage,
     required this.onPlayAudio,
@@ -2144,6 +2166,8 @@ class _MessageList extends StatelessWidget {
   final String playingAudioKey;
   final ValueListenable<Duration> audioPosition;
   final ValueListenable<Duration> audioDuration;
+  final double audioSpeed;
+  final VoidCallback onCycleAudioSpeed;
   final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
@@ -2200,6 +2224,8 @@ class _MessageList extends StatelessWidget {
           playingAudioKey: playingAudioKey,
           audioPosition: audioPosition,
           audioDuration: audioDuration,
+          audioSpeed: audioSpeed,
+          onCycleAudioSpeed: onCycleAudioSpeed,
           onSeekAudio: onSeekAudio,
           onOpenImage: onOpenImage,
           onPlayAudio: onPlayAudio,
@@ -2453,6 +2479,8 @@ class _MessageBubble extends StatelessWidget {
     required this.playingAudioKey,
     required this.audioPosition,
     required this.audioDuration,
+    required this.audioSpeed,
+    required this.onCycleAudioSpeed,
     required this.onSeekAudio,
     required this.onOpenImage,
     required this.onPlayAudio,
@@ -2474,6 +2502,8 @@ class _MessageBubble extends StatelessWidget {
   final String playingAudioKey;
   final ValueListenable<Duration> audioPosition;
   final ValueListenable<Duration> audioDuration;
+  final double audioSpeed;
+  final VoidCallback onCycleAudioSpeed;
   final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
@@ -2737,26 +2767,44 @@ class _MessageBubble extends StatelessWidget {
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    TextButton.icon(
-                      onPressed: () => onPlayAudio(message),
-                      style: TextButton.styleFrom(
-                        foregroundColor: isPlaying
-                            ? const Color(0xFFC74444)
-                            : const Color(0xFF666666),
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        minimumSize: const Size(0, 30),
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      icon: Icon(
-                        isPlaying
-                            ? Icons.stop_circle_outlined
-                            : Icons.volume_up_outlined,
-                        size: 16,
-                      ),
-                      label: Text(
-                        isPlaying ? '停止播放' : '播放语音',
-                        style: const TextStyle(fontSize: 12),
-                      ),
+                    Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextButton.icon(
+                          onPressed: () => onPlayAudio(message),
+                          style: TextButton.styleFrom(
+                            foregroundColor: isPlaying
+                                ? const Color(0xFFC74444)
+                                : const Color(0xFF666666),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: const Size(0, 30),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          icon: Icon(
+                            isPlaying
+                                ? Icons.stop_circle_outlined
+                                : Icons.volume_up_outlined,
+                            size: 16,
+                          ),
+                          label: Text(
+                            isPlaying ? '停止播放' : '播放语音',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: onCycleAudioSpeed,
+                          style: TextButton.styleFrom(
+                            foregroundColor: const Color(0xFFC74444),
+                            padding: const EdgeInsets.symmetric(horizontal: 4),
+                            minimumSize: const Size(0, 30),
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: Text(
+                            '${audioSpeed}x',
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                        ),
+                      ],
                     ),
                     if (isPlaying && duration.inMilliseconds > 0) ...[
                       const SizedBox(height: 2),
