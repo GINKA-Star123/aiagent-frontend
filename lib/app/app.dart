@@ -1192,6 +1192,27 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _historyStore.save(next);
   }
 
+  void _openImageViewer(String path) {
+    final images = _messages
+        .where((message) => message.imagePath.isNotEmpty)
+        .map((message) => message.imagePath)
+        .toList();
+    if (images.isEmpty) {
+      return;
+    }
+    var index = images.indexOf(path);
+    if (index < 0) {
+      index = 0;
+    }
+    showDialog<void>(
+      context: context,
+      barrierColor: Colors.black,
+      builder: (dialogContext) {
+        return _ImagePager(imagePaths: images, initialIndex: index);
+      },
+    );
+  }
+
   Future<void> _playResponseAudio(String responseAudioUrl) async {
     final audioUrl = _apiClient.authorizedAudioUrl(responseAudioUrl);
     if (audioUrl.isEmpty) {
@@ -1674,6 +1695,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                             _messages.isNotEmpty &&
                             _messages.last.role == ChatRole.user,
                         playingAudioKey: _playingAudioKey,
+                        onOpenImage: _openImageViewer,
                         onPlayAudio: _playMessageAudio,
                         onDelete: _deleteMessage,
                         onQuote: _quoteMessage,
@@ -1726,6 +1748,88 @@ class _ChatHomePageState extends State<ChatHomePage>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _ImagePager extends StatefulWidget {
+  const _ImagePager({required this.imagePaths, required this.initialIndex});
+
+  final List<String> imagePaths;
+  final int initialIndex;
+
+  @override
+  State<_ImagePager> createState() => _ImagePagerState();
+}
+
+class _ImagePagerState extends State<_ImagePager> {
+  late final PageController _controller = PageController(
+    initialPage: widget.initialIndex,
+  );
+  late int _index = widget.initialIndex;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog.fullscreen(
+      backgroundColor: Colors.black,
+      child: SafeArea(
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _controller,
+              itemCount: widget.imagePaths.length,
+              onPageChanged: (value) {
+                setState(() {
+                  _index = value;
+                });
+              },
+              itemBuilder: (context, index) {
+                final path = widget.imagePaths[index];
+                return InteractiveViewer(
+                  panEnabled: false,
+                  minScale: 1,
+                  maxScale: 4,
+                  child: Center(
+                    child: Image.file(
+                      File(path),
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stackTrace) {
+                        return const Text(
+                          '图片无法显示',
+                          style: TextStyle(color: Colors.white70),
+                        );
+                      },
+                    ),
+                  ),
+                );
+              },
+            ),
+            Positioned(
+              top: 8,
+              left: 16,
+              child: Text(
+                '${_index + 1}/${widget.imagePaths.length}',
+                style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              right: 4,
+              child: IconButton(
+                tooltip: '关闭',
+                onPressed: () => Navigator.of(context).pop(),
+                icon: const Icon(Icons.close, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1973,6 +2077,7 @@ class _MessageList extends StatelessWidget {
     required this.agentAvatarPath,
     required this.typing,
     required this.playingAudioKey,
+    required this.onOpenImage,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
@@ -1990,6 +2095,7 @@ class _MessageList extends StatelessWidget {
   final String agentAvatarPath;
   final bool typing;
   final String playingAudioKey;
+  final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
@@ -2041,6 +2147,7 @@ class _MessageList extends StatelessWidget {
           myAvatarPath: myAvatarPath,
           agentAvatarPath: agentAvatarPath,
           playingAudioKey: playingAudioKey,
+          onOpenImage: onOpenImage,
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
           onFeedback: onFeedback,
@@ -2208,6 +2315,7 @@ class _MessageBubble extends StatelessWidget {
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.playingAudioKey,
+    required this.onOpenImage,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
@@ -2224,6 +2332,7 @@ class _MessageBubble extends StatelessWidget {
   final String myAvatarPath;
   final String agentAvatarPath;
   final String playingAudioKey;
+  final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
@@ -2345,7 +2454,7 @@ class _MessageBubble extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: GestureDetector(
-                  onTap: () => _openImageViewer(context, imagePath),
+                  onTap: () => onOpenImage(imagePath),
                   child: Image.file(
                     File(imagePath),
                     width: 220,
@@ -2600,53 +2709,6 @@ class _MessageBubble extends StatelessWidget {
       index += 1;
     }
     return (quote: quoteLines.join('\n'), body: lines.skip(index).join('\n'));
-  }
-
-  void _openImageViewer(BuildContext context, String path) {
-    showDialog<void>(
-      context: context,
-      barrierColor: Colors.black87,
-      builder: (dialogContext) {
-        return Dialog(
-          backgroundColor: Colors.transparent,
-          insetPadding: const EdgeInsets.all(12),
-          child: Stack(
-            children: [
-              ConstrainedBox(
-                constraints: BoxConstraints(
-                  maxWidth: MediaQuery.sizeOf(dialogContext).width - 24,
-                  maxHeight: MediaQuery.sizeOf(dialogContext).height * 0.8,
-                ),
-                child: InteractiveViewer(
-                  child: Image.file(
-                    File(path),
-                    fit: BoxFit.contain,
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text(
-                          '图片无法显示',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 0,
-                right: 0,
-                child: IconButton(
-                  tooltip: '关闭',
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  icon: const Icon(Icons.close, color: Colors.white),
-                ),
-              ),
-            ],
-          ),
-        );
-      },
-    );
   }
 
   String _formatTime(DateTime value) {
