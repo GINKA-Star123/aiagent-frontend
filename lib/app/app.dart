@@ -18,7 +18,6 @@ import '../about/about_page.dart';
 import '../api/api_client.dart';
 import '../api/api_config.dart';
 import '../api/api_models.dart';
-import '../auth/activation_page.dart';
 import '../auth/auth_page.dart';
 import '../audio/audio_playback_service.dart';
 import '../audio/recorder_service.dart';
@@ -33,10 +32,8 @@ import '../chat/favorites_page.dart';
 import '../chat/message_actions.dart';
 import '../chat/unread_marker_store.dart';
 import '../connectivity/backend_status.dart';
-import '../core/activation.dart';
 import '../core/feedback_store.dart';
 import '../core/outbox.dart';
-import '../core/session_store.dart';
 import '../core/telemetry.dart';
 import '../identity/identity_store.dart';
 import '../identity/user_identity.dart';
@@ -94,14 +91,13 @@ class _ChatHomePageState extends State<ChatHomePage>
 
   late ApiClient _apiClient;
   late final IdentityStore _identityStore;
-  late final ChatHistoryStore _historyStore;
+  late ChatHistoryStore _historyStore;
   late final AppPreferences _preferences;
   late final AudioPlaybackService _audioPlaybackService;
   late final RecorderService _recorderService;
   late final PresenceOpeningGate _presenceOpeningGate;
-  late final SessionStore _sessionStore;
-  late final OutboxStore _outboxStore;
-  late final FeedbackStore _feedbackStore;
+  late OutboxStore _outboxStore;
+  late FeedbackStore _feedbackStore;
   Map<String, Map<String, dynamic>> _feedback = {};
   String _myAvatarPath = '';
   String _agentAvatarPath = '';
@@ -118,11 +114,6 @@ class _ChatHomePageState extends State<ChatHomePage>
   StreamSubscription<List<ConnectivityResult>>? _connectivitySub;
   Timer? _outboxTimer;
 
-  static const bool _authUiEnabled = bool.fromEnvironment(
-    'AUTH_UI_ENABLED',
-    defaultValue: false,
-  );
-
   StreamSubscription<bool>? _speakingSubscription;
   StreamSubscription<void>? _audioCompletionSubscription;
   final Map<String, Duration> _audioResumePositions = {};
@@ -133,7 +124,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   List<ChatMessage> _messages = [];
 
   bool _apiClientReady = false;
-  bool _needsActivation = false;
+  bool _needsAuth = false;
   bool _loading = true;
   bool _sending = false;
   bool _speaking = false;
@@ -209,89 +200,69 @@ class _ChatHomePageState extends State<ChatHomePage>
 
   Future<void> _bootstrap() async {
     _identityStore = IdentityStore();
-    _historyStore = ChatHistoryStore();
     _presenceOpeningGate = const PresenceOpeningGate();
-    _sessionStore = SessionStore();
-    _outboxStore = OutboxStore();
-    _feedbackStore = FeedbackStore();
     _preferences = await AppPreferences.load();
     _chatFontSize = _preferences.chatFontSize;
     _audioSpeed = _preferences.audioSpeed;
     _suggestionAutoSend = _preferences.suggestionAutoSend;
     unawaited(_audioPlaybackService.setPlaybackRate(_audioSpeed));
+    _apiConfig = await ApiConfig.load();
 
-    final storedCode = await _sessionStore.loadActivationCode();
-    final envCode = ActivationConfig.rawFromEnvironment();
-    final rawCode = (storedCode != null && storedCode.isNotEmpty)
-        ? storedCode
-        : (envCode.isEmpty ? null : envCode);
-
-    if (rawCode == null) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-        _needsActivation = true;
-        _statusText = '需要激活';
-      });
-      return;
-    }
-
-    await _applyActivation(rawCode);
-  }
-
-  Future<void> _applyActivation(String rawCode) async {
-    ActivationConfig config;
-    try {
-      config = ActivationConfig.decode(rawCode);
-    } on ActivationException catch (error) {
-      if (!mounted) {
-        return;
-      }
-      setState(() {
-        _loading = false;
-        _needsActivation = true;
-        _statusText = error.message;
-      });
-      return;
-    }
-
-    final history = await _historyStore.load();
     final existing = await _identityStore.load();
-    final sameUser = existing != null && existing.userId == config.userId;
-    final identity = UserIdentity(
-      userId: config.userId,
-      username: sameUser && existing.username.isNotEmpty
-          ? existing.username
-          : config.username,
-      deviceId:
-          existing?.deviceId ??
-          'device_${DateTime.now().millisecondsSinceEpoch}',
-      createdAt: existing?.createdAt ?? DateTime.now(),
-      accessToken: config.token,
-      refreshToken: existing?.refreshToken ?? '',
-    );
-    await _identityStore.save(identity);
-    final draft = await DraftStore.load(identity.userId);
+    if (existing != null && existing.accessToken.isNotEmpty) {
+      await _startSession(existing, statusText: '欢迎回来，${existing.username}');
+      return;
+    }
 
     if (!mounted) {
       return;
     }
+    setState(() {
+      _loading = false;
+      _needsAuth = true;
+      _statusText = '请登录';
+    });
+  }
 
-    final apiConfig = ApiConfig(
-      environment: config.primaryBaseUrl.startsWith('https://')
-          ? 'cloud'
-          : 'dev',
-      apiBaseUrl: config.primaryBaseUrl,
-      timeoutSeconds: 120,
+  void _prepareStores(String userId) {
+    _historyStore = ChatHistoryStore(userId: userId);
+    _outboxStore = OutboxStore(userId: userId);
+    _feedbackStore = FeedbackStore(userId: userId);
+  }
+
+  Future<ApiConfig> _saveAuthServer(String baseUrl) async {
+    final normalized = baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
+    if (normalized.isEmpty) {
+      throw Exception('请填写服务器地址。');
+    }
+    final config = _apiConfig.copyWith(
+      apiBaseUrl: normalized,
+      environment: normalized.startsWith('https://') ? 'cloud' : 'dev',
     );
+    await config.save();
+    _apiConfig = config;
+    return config;
+  }
 
+  Future<void> _startSession(
+    UserIdentity identity, {
+    required String statusText,
+  }) async {
+    _prepareStores(identity.userId);
+    final history = await _historyStore.load();
+    final draft = await DraftStore.load(identity.userId);
     final apiClient = ApiClient(
-      config: apiConfig,
-      token: config.token,
-      baseUrls: config.baseUrls,
+      config: _apiConfig,
+      token: identity.accessToken,
+      baseUrls: [_apiConfig.apiBaseUrl],
     );
+    if (!mounted) {
+      apiClient.close();
+      return;
+    }
+    if (_apiClientReady) {
+      _apiClient.close();
+    }
     _telemetry = TelemetryService(
       sender: (batchId, app, events) => apiClient.sendTelemetryBatch(
         batchId: batchId,
@@ -300,12 +271,11 @@ class _ChatHomePageState extends State<ChatHomePage>
       ),
       appVersion: const String.fromEnvironment(
         'APP_VERSION',
-        defaultValue: '2.0.0',
+        defaultValue: '2.1.0',
       ),
       platform: Platform.operatingSystem,
     );
     setState(() {
-      _apiConfig = apiConfig;
       _apiClient = apiClient;
       _apiClientReady = true;
       _identity = identity;
@@ -322,8 +292,9 @@ class _ChatHomePageState extends State<ChatHomePage>
         );
       }
       _loading = false;
-      _needsActivation = false;
-      _statusText = '准备好了';
+      _needsAuth = false;
+      _openingRequested = false;
+      _statusText = statusText;
     });
     _jumpToLatestOnLoad();
 
@@ -338,57 +309,90 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _openPresenceSession();
   }
 
-  Future<void> _handleActivated(String rawCode) async {
-    await _sessionStore.saveActivationCode(rawCode);
-    await _applyActivation(rawCode);
+  Future<UserIdentity> _finishAuth(
+    AuthResponse auth, {
+    required String email,
+    required String usernameHint,
+    required String statusText,
+  }) async {
+    if (auth.userId.isEmpty || auth.token.isEmpty) {
+      throw Exception('服务器未返回有效登录凭据。');
+    }
+    final existing = await _identityStore.load();
+    final sameUser = existing != null && existing.userId == auth.userId;
+    final identity = UserIdentity(
+      userId: auth.userId,
+      username: auth.username.isEmpty ? usernameHint : auth.username,
+      email: email.isNotEmpty ? email : (sameUser ? existing.email : ''),
+      deviceId: existing?.deviceId.isNotEmpty == true
+          ? existing!.deviceId
+          : 'device_${DateTime.now().millisecondsSinceEpoch}',
+      createdAt: sameUser ? existing.createdAt : DateTime.now(),
+      accessToken: auth.token,
+    );
+    await _identityStore.save(identity);
+    if (identity.email.isNotEmpty) {
+      await _identityStore.saveEmailAlias(identity.email, identity.username);
+    }
+    await _startSession(identity, statusText: statusText);
+    return identity;
   }
 
   Future<UserIdentity> _login({
-    required String username,
+    required String identifier,
     required String password,
+    required String baseUrl,
   }) async {
-    final identity = await _identityStore.login(
-      username: username,
-      password: password,
+    final config = await _saveAuthServer(baseUrl);
+    var username = identifier.trim();
+    var email = '';
+    if (username.contains('@')) {
+      email = username.toLowerCase();
+      final mapped = await _identityStore.usernameForEmail(email);
+      if (mapped == null || mapped.isEmpty) {
+        throw Exception('该设备没有这个邮箱的登录记录，请改用用户名登录。');
+      }
+      username = mapped;
+    }
+    final client = ApiClient(config: config);
+    AuthResponse auth;
+    try {
+      auth = await client.login(username: username, password: password);
+    } finally {
+      client.close();
+    }
+    return _finishAuth(
+      auth,
+      email: email,
+      usernameHint: username,
+      statusText: '欢迎回来，${auth.username}',
     );
-    await _activateIdentity(identity, '欢迎回来，${identity.username}');
-    return identity;
   }
 
   Future<UserIdentity> _register({
+    required String email,
     required String username,
     required String password,
-    required String inviteCode,
+    required String baseUrl,
   }) async {
-    final identity = await _identityStore.register(
-      username: username,
-      password: password,
-      inviteCode: inviteCode,
+    final normalizedEmail = email.trim().toLowerCase();
+    if (await _identityStore.emailAliasExists(normalizedEmail)) {
+      throw Exception('该邮箱已在本机绑定过账号，请直接登录。');
+    }
+    final config = await _saveAuthServer(baseUrl);
+    final client = ApiClient(config: config);
+    AuthResponse auth;
+    try {
+      auth = await client.register(username: username, password: password);
+    } finally {
+      client.close();
+    }
+    return _finishAuth(
+      auth,
+      email: normalizedEmail,
+      usernameHint: username,
+      statusText: '账号已创建',
     );
-    await _activateIdentity(identity, '账号已创建');
-    return identity;
-  }
-
-  Future<void> _activateIdentity(
-    UserIdentity identity,
-    String statusText,
-  ) async {
-    if (!mounted) {
-      return;
-    }
-    setState(() {
-      _identity = identity;
-      _statusText = statusText;
-      _openingRequested = false;
-    });
-    final draft = await DraftStore.load(identity.userId);
-    if (mounted && draft.isNotEmpty && _textController.text.isEmpty) {
-      _textController.text = draft;
-      _textController.selection = TextSelection.collapsed(offset: draft.length);
-    }
-    await _loadAvatars();
-    await _checkHealth(silentWhenConnected: true);
-    await _openPresenceSession();
   }
 
   Future<void> _logout() async {
@@ -400,14 +404,20 @@ class _ChatHomePageState extends State<ChatHomePage>
     _textController.clear();
     _draftTimer?.cancel();
     await _audioPlaybackService.stop();
-    await _sessionStore.clear();
     await _identityStore.clear();
+    if (_apiClientReady) {
+      _apiClient.close();
+      _apiClientReady = false;
+    }
     if (!mounted) {
       return;
     }
     setState(() {
       _identity = null;
-      _needsActivation = true;
+      _needsAuth = true;
+      _messages = [];
+      _outbox = [];
+      _feedback = {};
       _selectedImagePath = '';
       _quotedMessage = null;
       _audioResumePositions.clear();
@@ -421,6 +431,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _recording = false;
       _speaking = false;
       _openingRequested = false;
+      _loading = false;
       _statusText = '已退出登录';
     });
   }
@@ -513,6 +524,32 @@ class _ChatHomePageState extends State<ChatHomePage>
     return '';
   }
 
+  Future<void> _handleAuthExpired() async {
+    await _audioPlaybackService.stop();
+    await _identityStore.clear();
+    if (_apiClientReady) {
+      _apiClient.close();
+      _apiClientReady = false;
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _identity = null;
+      _needsAuth = true;
+      _loading = false;
+      _messages = [];
+      _outbox = [];
+      _feedback = {};
+      _playingAudioKey = '';
+      _speaking = false;
+      _sending = false;
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
+      _statusText = '登录已失效，请重新登录';
+    });
+  }
+
   Future<void> _checkHealth({bool silentWhenConnected = false}) async {
     setState(() {
       _backendStatus = BackendStatus.checking();
@@ -537,13 +574,13 @@ class _ChatHomePageState extends State<ChatHomePage>
         return;
       }
       final friendly = ChatErrorText.friendly(error);
-      final authFailure = ApiClient.isAuthFailure(error);
+      if (ApiClient.isAuthFailure(error)) {
+        await _handleAuthExpired();
+        return;
+      }
       setState(() {
         _backendStatus = BackendStatus.disconnected(friendly);
-        _statusText = authFailure ? '激活已失效，请重新激活' : friendly;
-        if (authFailure) {
-          _needsActivation = true;
-        }
+        _statusText = friendly;
       });
     }
   }
@@ -639,12 +676,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       await _appendAssistantResponse(response);
     } catch (error) {
       if (ApiClient.isAuthFailure(error)) {
-        if (mounted) {
-          setState(() {
-            _needsActivation = true;
-            _statusText = '激活已失效，请重新激活';
-          });
-        }
+        await _handleAuthExpired();
         return;
       }
       if (ApiClient.isNetworkFailure(error)) {
@@ -1820,7 +1852,10 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
     setState(() {
       _apiConfig = nextConfig;
-      _apiClient = ApiClient(config: nextConfig);
+      _apiClient = ApiClient(
+        config: nextConfig,
+        token: _identity?.accessToken ?? '',
+      );
       _apiClientReady = true;
       _openingRequested = false;
       _statusText = '服务器已更新';
@@ -2466,17 +2501,12 @@ class _ChatHomePageState extends State<ChatHomePage>
     if (_loading) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
-    if (_needsActivation) {
-      return ActivationPage(
-        onActivated: _handleActivated,
-        errorText: _statusText == '需要激活' ? '' : _statusText,
+    if (_needsAuth || _identity == null) {
+      return AuthPage(
+        onLogin: _login,
+        onRegister: _register,
+        initialApiBaseUrl: _apiConfig.apiBaseUrl,
       );
-    }
-    if (_identity == null) {
-      if (_authUiEnabled) {
-        return AuthPage(onLogin: _login, onRegister: _register);
-      }
-      return ActivationPage(onActivated: _handleActivated);
     }
 
     return PopScope(

@@ -6,7 +6,17 @@ import 'package:path_provider/path_provider.dart';
 import 'chat_message.dart';
 
 class ChatHistoryStore {
-  static const String _fileName = 'chat_history.json';
+  ChatHistoryStore({this.userId = ''});
+
+  final String userId;
+
+  String get _fileName {
+    if (userId.isEmpty) {
+      return 'chat_history.json';
+    }
+    final safe = userId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    return 'chat_history_$safe.json';
+  }
 
   Future<List<ChatMessage>> load() async {
     final file = await _getHistoryFile();

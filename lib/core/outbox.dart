@@ -69,7 +69,12 @@ Duration outboxBackoff(int attempts) {
 }
 
 class OutboxStore {
-  static const String _key = 'chat.outbox.v1';
+  OutboxStore({this.userId = ''});
+
+  final String userId;
+
+  String get _key =>
+      userId.isEmpty ? 'chat.outbox.v1' : 'chat.outbox.v1.$userId';
 
   Future<List<OutboxEntry>> load() async {
     final prefs = await SharedPreferences.getInstance();

@@ -1,11 +1,11 @@
 # AIAgent Mobile（Flutter）
 
 AIAgent 的独立移动端仓库，只负责交互：聊天、语音、图片、记忆、反馈。
-不包含任何 LLM/TTS/ASR/RAG 配置，也不包含后端代码；服务地址与访问令牌由 **激活码** 一次性带入。
+不包含任何 LLM/TTS/ASR/RAG 配置，也不包含后端代码；服务器地址在登录页填写，账号通过邮箱/用户名 + 密码注册登录。
 
 - 仓库：https://github.com/GINKA-Star123/aiagent-frontend
 - 后端仓库：https://github.com/GINKA-Star123/OmniAgent（前后端分离）
-- 当前版本：**2.0.0+48**
+- 当前版本：**2.1.0+49**
 - 包名：`com.aiagent.mobile`
 
 ## 环境要求
@@ -28,9 +28,27 @@ cd aiagent-frontend
 flutter pub get
 ```
 
-激活码由后端侧生成（后端仓库的 `scripts/gen_activation_codes.py`），本仓库只负责粘贴使用。
-激活码内容：`base64url(JSON{主入口, 备用入口[], token, user_id, 昵称})`。
+账号由后端 `/auth/register` 与 `/auth/login` 提供；移动端不再使用激活码。
 
+
+
+## 账号与登录
+
+- 注册：邮箱 + 用户名 + 密码
+- 登录：邮箱或用户名 + 密码
+- 不含激活码、邀请码输入
+- 服务器地址在登录页填写，登录成功后保存到设置
+
+### 本版本的边界（前端-only）
+
+本次按要求**未修改后端**。现有后端只支持用户名/密码账号，没有 email 字段、邮箱登录或验证码接口，因此：
+
+- 邮箱保存在本机，作为**本机登录别名**；换设备/清空数据后邮箱登录不可用
+- 邮箱唯一性只在本机校验；跨设备真正邮箱身份需要后端改造
+- 用户名仍由后端唯一约束；同名账号会被后端拒绝
+- 长期记忆按后端返回的 `user_id` 隔离；聊天历史、发件箱、反馈也已改为按 `user_id` 分区
+- 后端需设置 `AUTH_REGISTRATION_ENABLED=true`，并保持 `AUTH_INVITE_CODE` 为空（配置项，不需改代码）
+- 验证码发送不可用，可行性见 [docs/email-verification-feasibility.md](docs/email-verification-feasibility.md)
 
 ## 2.0 功能总览
 
@@ -63,7 +81,7 @@ flutter pub get
 
 - 聊天背景：自定义图片、5 套渐变预设、暗度（20%–90%）、模糊（0–20）
 - 字号 13–20、合并连续头像（可选）、自动播放语音、开场白直发
-- 头像上传/重置、服务器地址配置、激活/退出账号
+- 头像上传/重置、服务器地址配置、登录/退出账号
 
 ### 质量
 
@@ -78,10 +96,10 @@ flutter pub get
 
 ```powershell
 flutter pub get
-flutter run --dart-define=ACTIVATION_CODE=<激活码>
+flutter run
 ```
 
-不传 `ACTIVATION_CODE` 时，App 首屏显示「激活设备」，粘贴激活码即可。
+App 首屏显示登录/注册页；填写服务器地址后登录。
 
 ## 测试
 
@@ -90,7 +108,7 @@ flutter analyze
 flutter test
 ```
 
-覆盖：激活码解析、发件箱/退避、多入口切换、降级 503 当回复、网络错误分类、遥测批量与失败保留、音频 URL token。
+覆盖：登录注册输入校验、发件箱/退避、多入口切换、降级 503 当回复、网络错误分类、遥测批量与失败保留、音频 URL token。
 
 ## 构建 release
 
@@ -203,9 +221,9 @@ android/local.properties
 lib/
   api/           Dio 客户端、模型、降级解析
   app/           主页面与聊天 UI
-  auth/          激活页（登录页保留但默认隐藏）
+  auth/          登录/注册页
   chat/          消息模型、历史、错误文案、操作菜单
-  core/          激活码、会话、发件箱、遥测、反馈
+  core/          发件箱、遥测、反馈
   audio/         录音与播放
   memory/        记忆页
   settings/      设置
@@ -217,5 +235,7 @@ test/            单元/契约测试
 ## 已知说明
 
 - 默认允许明文 HTTP（`android:usesCleartextTraffic="true"`），便于内网/隧道联调；正式分发建议 HTTPS。
+- 邮箱目前为本机别名，不是服务端验证身份；详见邮箱验证可行性文档。
+- 旧的激活码历史文件/本地账号不会自动迁移到新账号体系。
 - 语音播放地址会自动附加 `access_token` 查询参数（后端 `/audio/*` 支持）。
-- 快速隧道（trycloudflare）每次重启 URL 会变，激活码需要重新生成。
+- 快速隧道（trycloudflare）每次重启 URL 会变，需要在登录页更新服务器地址。

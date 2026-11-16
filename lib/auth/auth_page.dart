@@ -3,39 +3,62 @@ import 'package:flutter/material.dart';
 import '../identity/user_identity.dart';
 
 class AuthPage extends StatefulWidget {
-  const AuthPage({super.key, required this.onLogin, required this.onRegister});
+  const AuthPage({
+    super.key,
+    required this.onLogin,
+    required this.onRegister,
+    this.initialApiBaseUrl = '',
+  });
 
   final Future<UserIdentity> Function({
-    required String username,
+    required String identifier,
     required String password,
+    required String baseUrl,
   })
   onLogin;
   final Future<UserIdentity> Function({
+    required String email,
     required String username,
     required String password,
-    required String inviteCode,
+    required String baseUrl,
   })
   onRegister;
+  final String initialApiBaseUrl;
 
   @override
   State<AuthPage> createState() => _AuthPageState();
 }
 
 class _AuthPageState extends State<AuthPage> {
+  late final TextEditingController _identifierController;
+  final TextEditingController _emailController = TextEditingController();
   final TextEditingController _usernameController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
-  final TextEditingController _inviteCodeController = TextEditingController();
+  final TextEditingController _confirmController = TextEditingController();
+  late final TextEditingController _serverController;
 
   bool _registerMode = false;
   bool _submitting = false;
   bool _obscurePassword = true;
   String _errorText = '';
 
+  static final RegExp _emailPattern = RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$');
+
+  @override
+  void initState() {
+    super.initState();
+    _identifierController = TextEditingController();
+    _serverController = TextEditingController(text: widget.initialApiBaseUrl);
+  }
+
   @override
   void dispose() {
+    _identifierController.dispose();
+    _emailController.dispose();
     _usernameController.dispose();
     _passwordController.dispose();
-    _inviteCodeController.dispose();
+    _confirmController.dispose();
+    _serverController.dispose();
     super.dispose();
   }
 
@@ -43,31 +66,94 @@ class _AuthPageState extends State<AuthPage> {
     if (_submitting) {
       return;
     }
+    final baseUrl = _serverController.text.trim();
+    if (baseUrl.isEmpty) {
+      setState(() {
+        _errorText = '请填写服务器地址。';
+      });
+      return;
+    }
 
+    final password = _passwordController.text;
+    if (password.length < 6) {
+      setState(() {
+        _errorText = '密码至少需要 6 个字符。';
+      });
+      return;
+    }
+
+    if (_registerMode) {
+      final email = _emailController.text.trim().toLowerCase();
+      final username = _usernameController.text.trim();
+      if (!_emailPattern.hasMatch(email)) {
+        setState(() {
+          _errorText = '请输入有效的邮箱地址。';
+        });
+        return;
+      }
+      if (username.length < 2 || username.length > 32) {
+        setState(() {
+          _errorText = '用户名需为 2–32 个字符。';
+        });
+        return;
+      }
+      if (password != _confirmController.text) {
+        setState(() {
+          _errorText = '两次输入的密码不一致。';
+        });
+        return;
+      }
+      setState(() {
+        _submitting = true;
+        _errorText = '';
+      });
+      try {
+        await widget.onRegister(
+          email: email,
+          username: username,
+          password: password,
+          baseUrl: baseUrl,
+        );
+      } catch (error) {
+        if (!mounted) {
+          return;
+        }
+        setState(() {
+          _errorText = _friendlyError(error);
+        });
+      } finally {
+        if (mounted) {
+          setState(() {
+            _submitting = false;
+          });
+        }
+      }
+      return;
+    }
+
+    final identifier = _identifierController.text.trim();
+    if (identifier.isEmpty) {
+      setState(() {
+        _errorText = '请输入邮箱或用户名。';
+      });
+      return;
+    }
     setState(() {
       _submitting = true;
       _errorText = '';
     });
-
     try {
-      if (_registerMode) {
-        await widget.onRegister(
-          username: _usernameController.text.trim(),
-          password: _passwordController.text,
-          inviteCode: _inviteCodeController.text.trim(),
-        );
-      } else {
-        await widget.onLogin(
-          username: _usernameController.text.trim(),
-          password: _passwordController.text,
-        );
-      }
+      await widget.onLogin(
+        identifier: identifier,
+        password: password,
+        baseUrl: baseUrl,
+      );
     } catch (error) {
       if (!mounted) {
         return;
       }
       setState(() {
-        _errorText = error.toString().replaceFirst('Exception: ', '');
+        _errorText = _friendlyError(error);
       });
     } finally {
       if (mounted) {
@@ -76,6 +162,14 @@ class _AuthPageState extends State<AuthPage> {
         });
       }
     }
+  }
+
+  String _friendlyError(Object error) {
+    final text = error.toString();
+    if (text.startsWith('Exception: ')) {
+      return text.substring('Exception: '.length);
+    }
+    return text;
   }
 
   @override
@@ -94,8 +188,8 @@ class _AuthPageState extends State<AuthPage> {
                   constraints: const BoxConstraints(maxWidth: 420),
                   child: DecoratedBox(
                     decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.34),
-                      borderRadius: BorderRadius.circular(8),
+                      color: Colors.white.withValues(alpha: 0.36),
+                      borderRadius: BorderRadius.circular(10),
                       border: Border.all(
                         color: Colors.white.withValues(alpha: 0.82),
                       ),
@@ -119,26 +213,50 @@ class _AuthPageState extends State<AuthPage> {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Text(
-                            _registerMode ? '创建账号' : '欢迎回来',
+                            _registerMode ? '创建账号' : '登录 AIAgent',
                             style: Theme.of(context).textTheme.headlineSmall
                                 ?.copyWith(fontWeight: FontWeight.w800),
                           ),
                           const SizedBox(height: 6),
                           Text(
                             _registerMode
-                                ? '目前只向持有邀请码的用户开放。'
-                                : '登录后进入 AIAgent。',
+                                ? '邮箱 + 用户名 + 密码。服务端账号仍使用用户名。'
+                                : '使用邮箱或用户名登录。',
                             style: const TextStyle(color: Colors.black54),
                           ),
-                          const SizedBox(height: 22),
-                          TextField(
-                            controller: _usernameController,
-                            textInputAction: TextInputAction.next,
-                            decoration: const InputDecoration(
-                              labelText: '用户名',
-                              prefixIcon: Icon(Icons.person_outline),
+                          const SizedBox(height: 20),
+                          if (_registerMode) ...[
+                            TextField(
+                              controller: _emailController,
+                              keyboardType: TextInputType.emailAddress,
+                              autocorrect: false,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: '邮箱',
+                                helperText: '邮箱仅保存在本机，用于本机登录别名。',
+                                prefixIcon: Icon(Icons.mail_outline),
+                              ),
                             ),
-                          ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _usernameController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: '用户名',
+                                helperText: '2–32 个字符；服务端唯一。',
+                                prefixIcon: Icon(Icons.person_outline),
+                              ),
+                            ),
+                          ] else
+                            TextField(
+                              controller: _identifierController,
+                              textInputAction: TextInputAction.next,
+                              decoration: const InputDecoration(
+                                labelText: '邮箱或用户名',
+                                helperText: '邮箱登录需在本机注册过该邮箱。',
+                                prefixIcon: Icon(Icons.account_circle_outlined),
+                              ),
+                            ),
                           const SizedBox(height: 12),
                           TextField(
                             controller: _passwordController,
@@ -153,6 +271,7 @@ class _AuthPageState extends State<AuthPage> {
                             },
                             decoration: InputDecoration(
                               labelText: '密码',
+                              helperText: '至少 6 个字符。',
                               prefixIcon: const Icon(Icons.lock_outline),
                               suffixIcon: IconButton(
                                 tooltip: _obscurePassword ? '显示密码' : '隐藏密码',
@@ -172,15 +291,29 @@ class _AuthPageState extends State<AuthPage> {
                           if (_registerMode) ...[
                             const SizedBox(height: 12),
                             TextField(
-                              controller: _inviteCodeController,
-                              textInputAction: TextInputAction.done,
-                              onSubmitted: (_) => _submit(),
+                              controller: _confirmController,
+                              obscureText: _obscurePassword,
+                              textInputAction: TextInputAction.next,
                               decoration: const InputDecoration(
-                                labelText: '邀请码',
-                                prefixIcon: Icon(Icons.key_outlined),
+                                labelText: '确认密码',
+                                prefixIcon: Icon(Icons.lock_reset_outlined),
                               ),
                             ),
                           ],
+                          const SizedBox(height: 12),
+                          TextField(
+                            controller: _serverController,
+                            keyboardType: TextInputType.url,
+                            autocorrect: false,
+                            textInputAction: TextInputAction.done,
+                            onSubmitted: (_) => _submit(),
+                            decoration: const InputDecoration(
+                              labelText: '服务器地址',
+                              hintText: 'https://api.example.com',
+                              helperText: '留空无效；登录成功后保存到设置。',
+                              prefixIcon: Icon(Icons.dns_outlined),
+                            ),
+                          ),
                           if (_errorText.isNotEmpty) ...[
                             const SizedBox(height: 12),
                             Text(
@@ -191,7 +324,7 @@ class _AuthPageState extends State<AuthPage> {
                               ),
                             ),
                           ],
-                          const SizedBox(height: 22),
+                          const SizedBox(height: 20),
                           FilledButton.icon(
                             onPressed: _submitting ? null : _submit,
                             icon: _submitting
@@ -209,7 +342,7 @@ class _AuthPageState extends State<AuthPage> {
                                   ),
                             label: Text(_registerMode ? '注册并进入' : '登录'),
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 8),
                           TextButton(
                             onPressed: _submitting
                                 ? null

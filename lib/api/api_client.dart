@@ -171,6 +171,73 @@ class ApiClient {
     );
   }
 
+  Future<AuthResponse> login({
+    required String username,
+    required String password,
+  }) {
+    return _authRequest('/auth/login', {
+      'username': username,
+      'password': password,
+    });
+  }
+
+  Future<AuthResponse> register({
+    required String username,
+    required String password,
+  }) {
+    return _authRequest('/auth/register', {
+      'username': username,
+      'password': password,
+    });
+  }
+
+  Future<AuthResponse> _authRequest(
+    String path,
+    Map<String, dynamic> body,
+  ) async {
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(path, data: body);
+      final data = _requireMap(response.data);
+      if (data['ok'] == false) {
+        throw ApiException(_authErrorMessage(data));
+      }
+      return AuthResponse.fromJson(data);
+    } on DioException catch (error) {
+      final data = error.response?.data;
+      if (data is Map) {
+        throw ApiException(
+          _authErrorMessage(
+            data.map((key, value) => MapEntry(key.toString(), value)),
+          ),
+        );
+      }
+      throw ApiException('网络连接失败，请检查服务器地址后重试。');
+    }
+  }
+
+  String _authErrorMessage(Map<String, dynamic> data) {
+    final code = data['code']?.toString() ?? '';
+    switch (code) {
+      case 'username_taken':
+        return '用户名已被占用，请换一个。';
+      case 'invalid_username':
+        return '用户名需为 2–32 个非空格字符。';
+      case 'invalid_password':
+        return '密码长度需为 6–128 个字符。';
+      case 'invalid_credentials':
+        return '邮箱/用户名或密码错误。';
+      case 'registration_disabled':
+        return '后端未开启注册（AUTH_REGISTRATION_ENABLED）。';
+      case 'invalid_invite':
+        return '后端仍要求邀请码，请将 AUTH_INVITE_CODE 留空。';
+      case 'username_ambiguous':
+        return '该用户名对应多个账号，请改用邮箱登录。';
+      default:
+        final error = data['error']?.toString() ?? '';
+        return error.isNotEmpty ? error : '登录服务暂不可用。';
+    }
+  }
+
   Future<ChatResponse> sendChat({
     required String userId,
     required String username,

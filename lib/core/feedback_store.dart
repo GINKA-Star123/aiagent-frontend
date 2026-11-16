@@ -4,7 +4,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// 本地点踩/点赞记录，key 为消息的 requestId（没有则用 clientMessageId）。
 class FeedbackStore {
-  static const String _key = 'chat.feedback.v1';
+  FeedbackStore({this.userId = ''});
+
+  final String userId;
+
+  String get _key =>
+      userId.isEmpty ? 'chat.feedback.v1' : 'chat.feedback.v1.$userId';
 
   Future<Map<String, Map<String, dynamic>>> load() async {
     final prefs = await SharedPreferences.getInstance();

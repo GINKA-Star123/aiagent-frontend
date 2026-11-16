@@ -18,6 +18,32 @@ class HealthResponse {
   }
 }
 
+class AuthResponse {
+  const AuthResponse({
+    required this.userId,
+    required this.username,
+    required this.token,
+    required this.expiresAt,
+    required this.isGuest,
+  });
+
+  final String userId;
+  final String username;
+  final String token;
+  final int expiresAt;
+  final bool isGuest;
+
+  factory AuthResponse.fromJson(Map<String, dynamic> json) {
+    return AuthResponse(
+      userId: json['user_id']?.toString() ?? '',
+      username: json['username']?.toString() ?? '',
+      token: json['token']?.toString() ?? '',
+      expiresAt: int.tryParse(json['expires_at']?.toString() ?? '') ?? 0,
+      isGuest: json['is_guest'] == true,
+    );
+  }
+}
+
 class ChatResponse {
   const ChatResponse({
     required this.ok,
