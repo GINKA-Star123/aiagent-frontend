@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
 
 import '../about/about_page.dart';
@@ -1825,6 +1826,16 @@ class _ImagePagerState extends State<_ImagePager> {
     super.dispose();
   }
 
+  Future<void> _shareImage(BuildContext context) async {
+    final path = widget.imagePaths[_index];
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await Share.shareXFiles([XFile(path)], subject: '聊天图片', text: '分享一张聊天图片');
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('分享失败')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog.fullscreen(
@@ -1867,6 +1878,15 @@ class _ImagePagerState extends State<_ImagePager> {
               child: Text(
                 '${_index + 1}/${widget.imagePaths.length}',
                 style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              right: 52,
+              child: IconButton(
+                tooltip: '分享',
+                onPressed: () => _shareImage(context),
+                icon: const Icon(Icons.share_outlined, color: Colors.white),
               ),
             ),
             Positioned(
