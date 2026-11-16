@@ -17,6 +17,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
   List<FavoriteMessage> _items = [];
   String _query = '';
   String _senderFilter = 'all';
+  String _typeFilter = 'all';
   bool _newestFirst = true;
   bool _loading = true;
 
@@ -30,6 +31,9 @@ class _FavoritesPageState extends State<FavoritesPage> {
         return false;
       }
       if (_senderFilter == 'agent' && item.sender != 'AIAgent') {
+        return false;
+      }
+      if (_typeFilter != 'all' && _typeOf(item) != _typeFilter) {
         return false;
       }
       return true;
@@ -63,6 +67,16 @@ class _FavoritesPageState extends State<FavoritesPage> {
       _items = items;
       _loading = false;
     });
+  }
+
+  String _typeOf(FavoriteMessage item) {
+    if (item.imagePath.isNotEmpty) {
+      return 'image';
+    }
+    if (item.text.startsWith('[语音')) {
+      return 'voice';
+    }
+    return 'text';
   }
 
   Future<void> _clearAll() async {
@@ -214,6 +228,24 @@ class _FavoritesPageState extends State<FavoritesPage> {
         backgroundColor: Colors.white,
         title: Text('收藏夹（${_items.length}）'),
         actions: [
+          PopupMenuButton<String>(
+            tooltip: '筛选类型',
+            icon: Icon(
+              Icons.filter_alt_outlined,
+              color: _typeFilter == 'all' ? null : const Color(0xFFC74444),
+            ),
+            onSelected: (value) {
+              setState(() {
+                _typeFilter = value;
+              });
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem<String>(value: 'all', child: Text('全部类型')),
+              PopupMenuItem<String>(value: 'text', child: Text('文字')),
+              PopupMenuItem<String>(value: 'image', child: Text('图片')),
+              PopupMenuItem<String>(value: 'voice', child: Text('语音')),
+            ],
+          ),
           IconButton(
             tooltip: _newestFirst ? '当前最新在前' : '当前最早在前',
             onPressed: () {

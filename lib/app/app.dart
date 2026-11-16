@@ -2714,7 +2714,20 @@ class _ImagePagerState extends State<_ImagePager> {
                 final path = widget.imagePaths[index];
                 return GestureDetector(
                   onDoubleTap: () {
-                    _transformationController.value = Matrix4.identity();
+                    if (_transformationController.value.getMaxScaleOnAxis() >
+                        1.01) {
+                      _transformationController.value = Matrix4.identity();
+                      return;
+                    }
+                    final size = MediaQuery.sizeOf(context);
+                    final center = Offset(size.width / 2, size.height / 2);
+                    const scale = 2.0;
+                    _transformationController.value = Matrix4.identity()
+                      ..setEntry(0, 0, scale)
+                      ..setEntry(1, 1, scale)
+                      ..setEntry(2, 2, scale)
+                      ..setEntry(0, 3, center.dx * (1 - scale))
+                      ..setEntry(1, 3, center.dy * (1 - scale));
                   },
                   child: InteractiveViewer(
                     transformationController: _transformationController,
