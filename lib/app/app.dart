@@ -1191,9 +1191,7 @@ class _ChatHomePageState extends State<ChatHomePage>
 
   void _applySuggestion(String prompt) {
     _textController.text = prompt;
-    _textController.selection = TextSelection.collapsed(
-      offset: prompt.length,
-    );
+    _textController.selection = TextSelection.collapsed(offset: prompt.length);
     _composerFocus.requestFocus();
   }
 
@@ -1385,6 +1383,29 @@ class _ChatHomePageState extends State<ChatHomePage>
       _statusText = '已删除消息';
     });
     await _historyStore.save(next);
+  }
+
+  Future<void> _saveChatImage(String path) async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await Gal.putImage(path);
+      messenger.showSnackBar(const SnackBar(content: Text('已保存到相册')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('保存失败，请检查相册权限')));
+    }
+  }
+
+  Future<void> _shareChatImage(String path) async {
+    try {
+      await Share.shareXFiles([XFile(path)], text: '分享一张聊天图片');
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('分享失败')));
+    }
   }
 
   void _openImageViewer(String path) {
@@ -2155,6 +2176,8 @@ class _ChatHomePageState extends State<ChatHomePage>
                           onCycleAudioSpeed: _cycleAudioSpeed,
                           onSeekAudio: _seekAudio,
                           onOpenImage: _openImageViewer,
+                          onSaveImage: _saveChatImage,
+                          onShareImage: _shareChatImage,
                           onPlayAudio: _playMessageAudio,
                           onDelete: _deleteMessage,
                           onQuote: _quoteMessage,
@@ -2676,6 +2699,8 @@ class _MessageList extends StatelessWidget {
     required this.onCycleAudioSpeed,
     required this.onSeekAudio,
     required this.onOpenImage,
+    required this.onSaveImage,
+    required this.onShareImage,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
@@ -2706,6 +2731,8 @@ class _MessageList extends StatelessWidget {
   final VoidCallback onCycleAudioSpeed;
   final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
+  final ValueChanged<String> onSaveImage;
+  final ValueChanged<String> onShareImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
@@ -2775,6 +2802,8 @@ class _MessageList extends StatelessWidget {
           onCycleAudioSpeed: onCycleAudioSpeed,
           onSeekAudio: onSeekAudio,
           onOpenImage: onOpenImage,
+          onSaveImage: onSaveImage,
+          onShareImage: onShareImage,
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
           onFeedback: onFeedback,
@@ -3083,6 +3112,8 @@ class _MessageBubble extends StatelessWidget {
     required this.onCycleAudioSpeed,
     required this.onSeekAudio,
     required this.onOpenImage,
+    required this.onSaveImage,
+    required this.onShareImage,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
@@ -3111,6 +3142,8 @@ class _MessageBubble extends StatelessWidget {
   final VoidCallback onCycleAudioSpeed;
   final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
+  final ValueChanged<String> onSaveImage;
+  final ValueChanged<String> onShareImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
@@ -3265,7 +3298,10 @@ class _MessageBubble extends StatelessWidget {
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: GestureDetector(
-                  onTap: () => onOpenImage(imagePath),
+                  onTap: selectionMode ? null : () => onOpenImage(imagePath),
+                  onLongPress: selectionMode
+                      ? null
+                      : () => _showImageActions(context, imagePath),
                   child: Image.file(
                     File(imagePath),
                     width: 220,
@@ -3565,6 +3601,51 @@ class _MessageBubble extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  void _showImageActions(BuildContext context, String path) {
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.visibility_outlined),
+                title: const Text('查看大图'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  onOpenImage(path);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.download_outlined),
+                title: const Text('保存到相册'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  onSaveImage(path);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.share_outlined),
+                title: const Text('分享图片'),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  onShareImage(path);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.close),
+                title: const Text('取消'),
+                onTap: () => Navigator.of(sheetContext).pop(),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
