@@ -34,6 +34,7 @@ import '../identity/identity_store.dart';
 import '../identity/user_identity.dart';
 import '../memory/memory_page.dart';
 import '../profile/avatar_store.dart';
+import '../profile/background_presets.dart';
 import '../profile/background_store.dart';
 import '../profile/profile_page.dart';
 import '../session/presence_opening_gate.dart';
@@ -89,6 +90,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   String _backgroundPath = '';
   double _backgroundDim = BackgroundStore.defaultDim;
   double _backgroundBlur = BackgroundStore.defaultBlur;
+  String _backgroundPreset = '';
   TelemetryService? _telemetry;
 
   final Uuid _uuid = const Uuid();
@@ -1441,6 +1443,7 @@ class _ChatHomePageState extends State<ChatHomePage>
             myAvatarPath: _myAvatarPath,
             agentAvatarPath: _agentAvatarPath,
             backgroundPath: _backgroundPath,
+            backgroundPreset: _backgroundPreset,
             backgroundDim: _backgroundDim,
             backgroundBlur: _backgroundBlur,
             onAvatarsChanged: _loadAvatars,
@@ -1605,6 +1608,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     final background = await BackgroundStore.load(identity.userId);
     final dim = await BackgroundStore.loadDim(identity.userId);
     final blur = await BackgroundStore.loadBlur(identity.userId);
+    final preset = await BackgroundStore.loadPreset(identity.userId);
     if (!mounted) {
       return;
     }
@@ -1614,6 +1618,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _backgroundPath = background;
       _backgroundDim = dim;
       _backgroundBlur = blur;
+      _backgroundPreset = preset;
     });
   }
 
@@ -1656,6 +1661,7 @@ class _ChatHomePageState extends State<ChatHomePage>
         children: [
           _ChatBackground(
             imagePath: _backgroundPath,
+            preset: _backgroundPreset,
             dim: _backgroundDim,
             blur: _backgroundBlur,
           ),
@@ -1836,11 +1842,13 @@ class _ImagePagerState extends State<_ImagePager> {
 class _ChatBackground extends StatelessWidget {
   const _ChatBackground({
     required this.imagePath,
+    required this.preset,
     required this.dim,
     required this.blur,
   });
 
   final String imagePath;
+  final String preset;
   final double dim;
   final double blur;
 
@@ -1848,7 +1856,17 @@ class _ChatBackground extends StatelessWidget {
   Widget build(BuildContext context) {
     const fallback = ColoredBox(color: Color(0xFFF2F3F5));
     final path = imagePath.trim();
-    if (path.isEmpty || !File(path).existsSync()) {
+    if (path.isEmpty) {
+      final selectedPreset = backgroundPresetById(preset);
+      if (selectedPreset != null) {
+        return DecoratedBox(
+          decoration: BoxDecoration(gradient: selectedPreset.gradient),
+          child: const SizedBox.expand(),
+        );
+      }
+      return fallback;
+    }
+    if (!File(path).existsSync()) {
       return fallback;
     }
     Widget image = Image.file(

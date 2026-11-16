@@ -9,8 +9,29 @@ class BackgroundStore {
 
   static const String _dimPrefix = 'chat.background.dim.';
   static const String _blurPrefix = 'chat.background.blur.';
+  static const String _presetPrefix = 'chat.background.preset.';
   static const double defaultDim = 0.62;
   static const double defaultBlur = 0;
+
+  static Future<String> loadPreset(String userId) async {
+    if (userId.isEmpty) {
+      return '';
+    }
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_presetPrefix + userId) ?? '';
+  }
+
+  static Future<void> savePreset(String userId, String presetId) async {
+    if (userId.isEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    if (presetId.isEmpty) {
+      await prefs.remove(_presetPrefix + userId);
+    } else {
+      await prefs.setString(_presetPrefix + userId, presetId);
+    }
+  }
 
   static Future<double> loadDim(String userId) async {
     if (userId.isEmpty) {

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../profile/avatar_store.dart';
+import '../profile/background_presets.dart';
 import '../profile/background_store.dart';
 
 class SettingsPage extends StatefulWidget {
@@ -13,6 +14,7 @@ class SettingsPage extends StatefulWidget {
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.backgroundPath,
+    required this.backgroundPreset,
     required this.backgroundDim,
     required this.backgroundBlur,
     required this.onAvatarsChanged,
@@ -37,6 +39,7 @@ class SettingsPage extends StatefulWidget {
   final String myAvatarPath;
   final String agentAvatarPath;
   final String backgroundPath;
+  final String backgroundPreset;
   final double backgroundDim;
   final double backgroundBlur;
   final Future<void> Function() onAvatarsChanged;
@@ -72,6 +75,7 @@ class _SettingsPageState extends State<SettingsPage> {
   late String _myAvatarPath;
   late String _agentAvatarPath;
   late String _backgroundPath;
+  late String _backgroundPreset;
   late double _backgroundDim;
   late double _backgroundBlur;
   final ImagePicker _imagePicker = ImagePicker();
@@ -87,6 +91,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _myAvatarPath = widget.myAvatarPath;
     _agentAvatarPath = widget.agentAvatarPath;
     _backgroundPath = widget.backgroundPath;
+    _backgroundPreset = widget.backgroundPreset;
     _backgroundDim = widget.backgroundDim;
     _backgroundBlur = widget.backgroundBlur;
   }
@@ -382,11 +387,13 @@ class _SettingsPageState extends State<SettingsPage> {
         return;
       }
       final path = await BackgroundStore.save(widget.userId, picked.path);
+      await BackgroundStore.savePreset(widget.userId, '');
       if (!mounted) {
         return;
       }
       setState(() {
         _backgroundPath = path;
+        _backgroundPreset = '';
       });
       await widget.onBackgroundChanged();
     } catch (error) {
@@ -405,13 +412,28 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  Future<void> _resetBackground() async {
+  Future<void> _selectBackgroundPreset(BackgroundPreset preset) async {
     await BackgroundStore.reset(widget.userId);
+    await BackgroundStore.savePreset(widget.userId, preset.id);
     if (!mounted) {
       return;
     }
     setState(() {
       _backgroundPath = '';
+      _backgroundPreset = preset.id;
+    });
+    await widget.onBackgroundChanged();
+  }
+
+  Future<void> _resetBackground() async {
+    await BackgroundStore.reset(widget.userId);
+    await BackgroundStore.savePreset(widget.userId, '');
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backgroundPath = '';
+      _backgroundPreset = '';
     });
     await widget.onBackgroundChanged();
   }
@@ -469,10 +491,35 @@ class _SettingsPageState extends State<SettingsPage> {
           _SettingsSection(
             title: '聊天背景',
             children: [
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [
+                  for (final preset in backgroundPresets)
+                    ChoiceChip(
+                      selected:
+                          _backgroundPath.isEmpty &&
+                          _backgroundPreset == preset.id,
+                      avatar: Container(
+                        width: 20,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          gradient: preset.gradient,
+                        ),
+                      ),
+                      label: Text(preset.label),
+                      onSelected: (_) => _selectBackgroundPreset(preset),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 12),
               _BackgroundSettingTile(
                 imagePath: _backgroundPath,
                 onPick: _pickBackground,
-                onReset: _backgroundPath.isEmpty ? null : _resetBackground,
+                onReset: _backgroundPath.isEmpty && _backgroundPreset.isEmpty
+                    ? null
+                    : _resetBackground,
               ),
               if (_backgroundPath.isNotEmpty) ...[
                 const Divider(height: 20),
