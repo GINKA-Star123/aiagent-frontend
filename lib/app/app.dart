@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:gal/gal.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:uuid/uuid.dart';
@@ -1796,6 +1797,58 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  String _formatExportTime(DateTime value) {
+    final month = value.month.toString().padLeft(2, '0');
+    final day = value.day.toString().padLeft(2, '0');
+    final hour = value.hour.toString().padLeft(2, '0');
+    final minute = value.minute.toString().padLeft(2, '0');
+    return '${value.year}-$month-$day $hour:$minute';
+  }
+
+  Future<void> _exportChat() async {
+    if (_messages.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('还没有聊天记录可导出')));
+      return;
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    final buffer = StringBuffer()
+      ..writeln('# AIAgent 聊天记录')
+      ..writeln()
+      ..writeln('导出时间：${_formatExportTime(DateTime.now())}')
+      ..writeln('消息数：${_messages.length}')
+      ..writeln();
+    for (final message in _messages) {
+      final sender = message.role == ChatRole.user
+          ? '我'
+          : (message.role == ChatRole.system ? '系统' : 'AIAgent');
+      buffer.writeln('**$sender** · ${_formatExportTime(message.createdAt)}');
+      buffer.writeln();
+      final content = message.text.trim();
+      if (content.isNotEmpty) {
+        buffer.writeln(content);
+      }
+      if (message.imagePath.isNotEmpty) {
+        buffer.writeln('_[图片]_');
+      }
+      buffer.writeln();
+    }
+    try {
+      final directory = await getTemporaryDirectory();
+      final stamp = DateTime.now().millisecondsSinceEpoch;
+      final file = File('${directory.path}/aiagent-chat-$stamp.md');
+      await file.writeAsString(buffer.toString());
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        subject: 'AIAgent 聊天记录',
+        text: '聊天记录',
+      );
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('导出失败，请稍后重试')));
+    }
+  }
+
   Future<void> _openSettingsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -2062,6 +2115,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                       onOpenSettings: _openSettingsPage,
                       onSearch: _openChatSearch,
                       onJumpDate: _showDateJumpPicker,
+                      onExportChat: _exportChat,
                       onCheckHealth: () => _checkHealth(),
                       onStopAudio: _stopAudio,
                     ),
@@ -2338,6 +2392,7 @@ class _ChatHeader extends StatelessWidget {
     required this.onOpenSettings,
     required this.onSearch,
     required this.onJumpDate,
+    required this.onExportChat,
     required this.onCheckHealth,
     required this.onStopAudio,
   });
@@ -2352,6 +2407,7 @@ class _ChatHeader extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final VoidCallback onSearch;
   final VoidCallback onJumpDate;
+  final VoidCallback onExportChat;
   final VoidCallback onCheckHealth;
   final VoidCallback onStopAudio;
 
@@ -2445,6 +2501,8 @@ class _ChatHeader extends StatelessWidget {
                 onStopAudio();
               } else if (value == 'jumpDate') {
                 onJumpDate();
+              } else if (value == 'export') {
+                onExportChat();
               } else if (value == 'settings') {
                 onOpenSettings();
               }
@@ -2455,6 +2513,7 @@ class _ChatHeader extends StatelessWidget {
                 value: 'jumpDate',
                 child: Text('跳转日期'),
               ),
+              const PopupMenuItem<String>(value: 'export', child: Text('导出聊天')),
               if (speaking)
                 const PopupMenuItem<String>(value: 'stop', child: Text('停止语音')),
               const PopupMenuItem<String>(value: 'settings', child: Text('设置')),
