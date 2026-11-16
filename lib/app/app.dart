@@ -1988,6 +1988,119 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  void _showChatStats() {
+    if (_messages.isEmpty) {
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('还没有聊天记录')));
+      return;
+    }
+    var userCount = 0;
+    var assistantCount = 0;
+    var systemCount = 0;
+    var imageCount = 0;
+    var voiceCount = 0;
+    var textChars = 0;
+    final days = <DateTime>{};
+    for (final message in _messages) {
+      switch (message.role) {
+        case ChatRole.user:
+          userCount += 1;
+        case ChatRole.assistant:
+          assistantCount += 1;
+        case ChatRole.system:
+          systemCount += 1;
+      }
+      if (message.imagePath.isNotEmpty) {
+        imageCount += 1;
+      }
+      if (message.text.startsWith('[语音')) {
+        voiceCount += 1;
+      }
+      textChars += message.text.length;
+      days.add(
+        DateTime(
+          message.createdAt.year,
+          message.createdAt.month,
+          message.createdAt.day,
+        ),
+      );
+    }
+    final first = _messages.first.createdAt;
+    final last = _messages.last.createdAt;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '聊天统计',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                ),
+                const SizedBox(height: 12),
+                _StatRow(
+                  icon: Icons.chat_bubble_outline,
+                  label: '总消息',
+                  value: '${_messages.length}',
+                ),
+                _StatRow(
+                  icon: Icons.person_outline,
+                  label: '我',
+                  value: '$userCount',
+                ),
+                _StatRow(
+                  icon: Icons.smart_toy_outlined,
+                  label: 'AIAgent',
+                  value: '$assistantCount',
+                ),
+                if (systemCount > 0)
+                  _StatRow(
+                    icon: Icons.info_outline,
+                    label: '系统',
+                    value: '$systemCount',
+                  ),
+                _StatRow(
+                  icon: Icons.image_outlined,
+                  label: '图片',
+                  value: '$imageCount',
+                ),
+                _StatRow(
+                  icon: Icons.mic_none,
+                  label: '语音',
+                  value: '$voiceCount',
+                ),
+                _StatRow(
+                  icon: Icons.text_fields,
+                  label: '文字量',
+                  value: '$textChars 字',
+                ),
+                _StatRow(
+                  icon: Icons.event_available_outlined,
+                  label: '活跃天数',
+                  value: '${days.length} 天',
+                ),
+                const Divider(height: 20),
+                Text(
+                  '${_formatExportTime(first)}  —  ${_formatExportTime(last)}',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    color: Color(0xFF999999),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Future<void> _openSettingsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -2273,6 +2386,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                       hasUnreadMarker: _unreadMarkerKey.isNotEmpty,
                       onJumpUnread: _jumpToUnread,
                       onExportChat: _exportChat,
+                      onChatStats: _showChatStats,
                       onCheckHealth: () => _checkHealth(),
                       onStopAudio: _stopAudio,
                     ),
@@ -2589,6 +2703,7 @@ class _ChatHeader extends StatelessWidget {
     required this.hasUnreadMarker,
     required this.onJumpUnread,
     required this.onExportChat,
+    required this.onChatStats,
     required this.onCheckHealth,
     required this.onStopAudio,
   });
@@ -2606,6 +2721,7 @@ class _ChatHeader extends StatelessWidget {
   final bool hasUnreadMarker;
   final VoidCallback onJumpUnread;
   final VoidCallback onExportChat;
+  final VoidCallback onChatStats;
   final VoidCallback onCheckHealth;
   final VoidCallback onStopAudio;
 
@@ -2703,6 +2819,8 @@ class _ChatHeader extends StatelessWidget {
                 onJumpUnread();
               } else if (value == 'export') {
                 onExportChat();
+              } else if (value == 'stats') {
+                onChatStats();
               } else if (value == 'settings') {
                 onOpenSettings();
               }
@@ -2719,10 +2837,50 @@ class _ChatHeader extends StatelessWidget {
                   child: Text('跳到未读'),
                 ),
               const PopupMenuItem<String>(value: 'export', child: Text('导出聊天')),
+              const PopupMenuItem<String>(value: 'stats', child: Text('聊天统计')),
               if (speaking)
                 const PopupMenuItem<String>(value: 'stop', child: Text('停止语音')),
               const PopupMenuItem<String>(value: 'settings', child: Text('设置')),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatRow extends StatelessWidget {
+  const _StatRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: const Color(0xFF777777)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              label,
+              style: const TextStyle(fontSize: 13, color: Color(0xFF555555)),
+            ),
+          ),
+          Text(
+            value,
+            style: const TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF222222),
+            ),
           ),
         ],
       ),
