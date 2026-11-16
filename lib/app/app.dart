@@ -1026,6 +1026,12 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  String _formatVoiceDuration(int value) {
+    final minutes = (value ~/ 60).toString().padLeft(2, '0');
+    final seconds = (value % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
+  }
+
   void _startRecordingTimer() {
     _recordingTimer?.cancel();
     _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
@@ -1056,26 +1062,8 @@ class _ChatHomePageState extends State<ChatHomePage>
     });
   }
 
-  Future<void> _sendTextToChat({
-    required String text,
-    required UserIdentity identity,
-  }) async {
-    await _audioPlaybackService.stop();
-    final message = ChatMessage.user(
-      text: text,
-      clientMessageId: _newClientMessageId(),
-      status: ChatMessageStatus.sending,
-    );
-    if (mounted) {
-      setState(() {
-        _messages = [..._messages, message];
-      });
-    }
-    await _historyStore.save(_messages);
-    await _deliverMessage(message, identity, voice: true);
-  }
-
   Future<void> _stopRecordingAndSend() async {
+    final durationLabel = _formatVoiceDuration(_recordingSeconds);
     _recordingTimer?.cancel();
     final identity = _identity;
     if (identity == null) {
@@ -1102,13 +1090,23 @@ class _ChatHomePageState extends State<ChatHomePage>
         throw Exception('ASR 没有返回文本。');
       }
 
-      final userMessage = ChatMessage.user(text: '[语音] $transcript');
+      final userMessage = ChatMessage.user(
+        text: '[语音 $durationLabel] $transcript',
+        clientMessageId: _newClientMessageId(),
+        status: ChatMessageStatus.sending,
+      );
       setState(() {
         _messages = [..._messages, userMessage];
         _statusText = '语音识别完成，正在回复...';
       });
+      await _historyStore.save(_messages);
       _scrollToBottomLater();
-      await _sendTextToChat(text: transcript, identity: identity);
+      await _deliverMessage(
+        userMessage,
+        identity,
+        manageSending: false,
+        voice: true,
+      );
     } catch (error) {
       await _appendSystemError(
         ChatErrorText.friendly(error),
@@ -2368,8 +2366,11 @@ class _MessageBubble extends StatelessWidget {
         (message.status == ChatMessageStatus.queued ||
             message.status == ChatMessageStatus.failed);
     final imagePath = message.imagePath;
-    final quoted = _splitQuote(message.text);
-    final bodyText = quoted?.body ?? message.text;
+    final voice = _parseVoice(message.text);
+    final quoted = voice == null ? _splitQuote(message.text) : null;
+    final bodyText = voice != null
+        ? voice.transcript
+        : (quoted?.body ?? message.text);
     final feedbackKey = message.requestId.isNotEmpty
         ? message.requestId
         : message.clientMessageId;
@@ -2419,6 +2420,29 @@ class _MessageBubble extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            if (voice != null) ...[
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.mic,
+                    size: 15,
+                    color: isUser ? Colors.white : const Color(0xFF777777),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    voice.duration.isEmpty ? '语音' : voice.duration,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: isUser ? Colors.white : const Color(0xFF777777),
+                    ),
+                  ),
+                ],
+              ),
+              if (imagePath.isNotEmpty || bodyText.trim().isNotEmpty)
+                const SizedBox(height: 6),
+            ],
             if (quoted != null) ...[
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -2691,6 +2715,17 @@ class _MessageBubble extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+
+  ({String duration, String transcript})? _parseVoice(String text) {
+    final match = RegExp(r'^\[语音(?: (\d{1,2}:\d{2}))?\]\s*').firstMatch(text);
+    if (match == null) {
+      return null;
+    }
+    return (
+      duration: match.group(1) ?? '',
+      transcript: text.substring(match.end).trim(),
     );
   }
 

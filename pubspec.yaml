@@ -2,7 +2,7 @@ name: flutter_client
 description: AIAgent product client.
 publish_to: "none"
 
-version: 1.4.3+14
+version: 1.4.4+15
 
 environment:
   sdk: ^3.11.0
