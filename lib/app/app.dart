@@ -6,6 +6,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:gal/gal.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -2175,6 +2176,17 @@ class _ImagePagerState extends State<_ImagePager> {
     super.dispose();
   }
 
+  Future<void> _saveImage(BuildContext context) async {
+    final path = widget.imagePaths[_index];
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await Gal.putImage(path);
+      messenger.showSnackBar(const SnackBar(content: Text('已保存到相册')));
+    } catch (_) {
+      messenger.showSnackBar(const SnackBar(content: Text('保存失败，请检查相册权限')));
+    }
+  }
+
   Future<void> _shareImage(BuildContext context) async {
     final path = widget.imagePaths[_index];
     final messenger = ScaffoldMessenger.of(context);
@@ -2227,6 +2239,15 @@ class _ImagePagerState extends State<_ImagePager> {
               child: Text(
                 '${_index + 1}/${widget.imagePaths.length}',
                 style: const TextStyle(color: Colors.white, fontSize: 13),
+              ),
+            ),
+            Positioned(
+              top: 0,
+              right: 100,
+              child: IconButton(
+                tooltip: '保存到相册',
+                onPressed: () => _saveImage(context),
+                icon: const Icon(Icons.download_outlined, color: Colors.white),
               ),
             ),
             Positioned(
