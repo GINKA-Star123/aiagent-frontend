@@ -101,6 +101,14 @@ class FavoriteStore {
     return added;
   }
 
+  static Future<void> clear(String userId) async {
+    if (userId.isEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_prefix + userId);
+  }
+
   static Future<void> remove(String userId, String key) async {
     if (userId.isEmpty) {
       return;

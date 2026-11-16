@@ -16,6 +16,7 @@ class _FavoritesPageState extends State<FavoritesPage> {
   final TextEditingController _searchController = TextEditingController();
   List<FavoriteMessage> _items = [];
   String _query = '';
+  String _senderFilter = 'all';
   bool _loading = true;
 
   List<FavoriteMessage> get _filteredItems {
@@ -23,9 +24,18 @@ class _FavoritesPageState extends State<FavoritesPage> {
     if (query.isEmpty) {
       return _items;
     }
-    return _items
-        .where((item) => item.text.toLowerCase().contains(query))
-        .toList();
+    return _items.where((item) {
+      if (!item.text.toLowerCase().contains(query)) {
+        return false;
+      }
+      if (_senderFilter == 'me' && item.sender != '我') {
+        return false;
+      }
+      if (_senderFilter == 'agent' && item.sender != 'AIAgent') {
+        return false;
+      }
+      return true;
+    }).toList();
   }
 
   @override
@@ -48,6 +58,38 @@ class _FavoritesPageState extends State<FavoritesPage> {
     setState(() {
       _items = items;
       _loading = false;
+    });
+  }
+
+  Future<void> _clearAll() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('清空收藏夹'),
+          content: Text('将删除全部 ${_items.length} 条收藏，且不可恢复。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('清空'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    await FavoriteStore.clear(widget.userId);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _items = [];
     });
   }
 
@@ -146,6 +188,20 @@ class _FavoritesPageState extends State<FavoritesPage> {
     return '${value.year}年${value.month}月${value.day}日';
   }
 
+  Widget _filterChip(String label, String value) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: _senderFilter == value,
+      onSelected: (_) {
+        setState(() {
+          _senderFilter = value;
+        });
+      },
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -153,40 +209,69 @@ class _FavoritesPageState extends State<FavoritesPage> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         title: Text('收藏夹（${_items.length}）'),
+        actions: [
+          IconButton(
+            tooltip: '清空收藏',
+            onPressed: _items.isEmpty ? null : _clearAll,
+            icon: const Icon(Icons.delete_sweep_outlined),
+          ),
+        ],
         bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(52),
+          preferredSize: const Size.fromHeight(104),
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-            child: TextField(
-              controller: _searchController,
-              onChanged: (value) {
-                setState(() {
-                  _query = value;
-                });
-              },
-              decoration: InputDecoration(
-                hintText: '搜索收藏内容',
-                isDense: true,
-                prefixIcon: const Icon(Icons.search, size: 18),
-                suffixIcon: _query.isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: '清空',
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {
-                            _query = '';
-                          });
-                        },
-                        icon: const Icon(Icons.close, size: 18),
-                      ),
-                filled: true,
-                fillColor: const Color(0xFFF2F3F5),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(10),
-                  borderSide: BorderSide.none,
+            child: Column(
+              children: [
+                TextField(
+                  controller: _searchController,
+                  onChanged: (value) {
+                    setState(() {
+                      _query = value;
+                    });
+                  },
+                  decoration: InputDecoration(
+                    hintText: '搜索收藏内容',
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    suffixIcon: _query.isEmpty
+                        ? null
+                        : IconButton(
+                            tooltip: '清空',
+                            onPressed: () {
+                              _searchController.clear();
+                              setState(() {
+                                _query = '';
+                              });
+                            },
+                            icon: const Icon(Icons.close, size: 18),
+                          ),
+                    filled: true,
+                    fillColor: const Color(0xFFF2F3F5),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
                 ),
-              ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    _filterChip('全部', 'all'),
+                    const SizedBox(width: 6),
+                    _filterChip('我', 'me'),
+                    const SizedBox(width: 6),
+                    _filterChip('AIAgent', 'agent'),
+                    const Spacer(),
+                    Text(
+                      '${_filteredItems.length} 条',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF999999),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
         ),
