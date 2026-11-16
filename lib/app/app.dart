@@ -116,6 +116,8 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _sending = false;
   bool _speaking = false;
   bool _recording = false;
+  int _recordingSeconds = 0;
+  Timer? _recordingTimer;
   bool _autoPlayVoice = true;
   double _chatFontSize = AppPreferences.defaultChatFontSize;
   Timer? _draftTimer;
@@ -147,6 +149,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     _textController.removeListener(_onDraftChanged);
     _textController.dispose();
     _draftTimer?.cancel();
+    _recordingTimer?.cancel();
     _composerFocus.dispose();
     _itemPositionsListener.itemPositions.removeListener(_handlePositions);
     _highlightTimer?.cancel();
@@ -1008,8 +1011,10 @@ class _ChatHomePageState extends State<ChatHomePage>
       }
       setState(() {
         _recording = true;
+        _recordingSeconds = 0;
         _statusText = '正在录音...';
       });
+      _startRecordingTimer();
     } catch (error) {
       if (!mounted) {
         return;
@@ -1019,6 +1024,36 @@ class _ChatHomePageState extends State<ChatHomePage>
         _statusText = ChatErrorText.friendly(error);
       });
     }
+  }
+
+  void _startRecordingTimer() {
+    _recordingTimer?.cancel();
+    _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      setState(() {
+        _recordingSeconds += 1;
+      });
+    });
+  }
+
+  Future<void> _cancelRecording() async {
+    _recordingTimer?.cancel();
+    try {
+      await _recorderService.cancel();
+    } catch (_) {
+      // 取消失败也恢复界面状态。
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _recording = false;
+      _recordingSeconds = 0;
+      _statusText = '已取消录音';
+    });
   }
 
   Future<void> _sendTextToChat({
@@ -1041,6 +1076,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   }
 
   Future<void> _stopRecordingAndSend() async {
+    _recordingTimer?.cancel();
     final identity = _identity;
     if (identity == null) {
       return;
@@ -1057,6 +1093,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       }
       setState(() {
         _recording = false;
+        _recordingSeconds = 0;
       });
 
       final asrResult = await _apiClient.transcribeAudio(audioPath: audioPath);
@@ -1081,6 +1118,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       if (mounted) {
         setState(() {
           _recording = false;
+          _recordingSeconds = 0;
           _sending = false;
         });
         _scrollToBottomLater();
@@ -1675,6 +1713,8 @@ class _ChatHomePageState extends State<ChatHomePage>
                   },
                   sending: _sending,
                   recording: _recording,
+                  recordingSeconds: _recordingSeconds,
+                  onCancelRecording: _cancelRecording,
                   selectedImagePath: _selectedImagePath,
                   onSend: _sendMessage,
                   onRecord: _toggleRecording,
@@ -2671,6 +2711,8 @@ class _InputBar extends StatelessWidget {
     required this.onCancelQuote,
     required this.sending,
     required this.recording,
+    required this.recordingSeconds,
+    required this.onCancelRecording,
     required this.selectedImagePath,
     required this.onSend,
     required this.onRecord,
@@ -2686,6 +2728,8 @@ class _InputBar extends StatelessWidget {
   final VoidCallback onCancelQuote;
   final bool sending;
   final bool recording;
+  final int recordingSeconds;
+  final VoidCallback onCancelRecording;
   final String selectedImagePath;
   final VoidCallback onSend;
   final VoidCallback onRecord;
@@ -2715,117 +2759,205 @@ class _InputBar extends StatelessWidget {
                 ),
                 const SizedBox(height: 8),
               ],
-              if (selectedImagePath.isNotEmpty) ...[
+              if (recording) ...[
+                _RecordingBanner(
+                  seconds: recordingSeconds,
+                  onCancel: onCancelRecording,
+                  onSend: onRecord,
+                ),
+                const SizedBox(height: 8),
+              ],
+              if (!recording && selectedImagePath.isNotEmpty) ...[
                 _SelectedImagePreview(
                   imagePath: selectedImagePath,
                   onClear: onClearImage,
                 ),
                 const SizedBox(height: 8),
               ],
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  PopupMenuButton<String>(
-                    tooltip: '发送图片',
-                    enabled: !sending && !recording,
-                    icon: const Icon(
-                      Icons.add_circle_outline,
-                      color: Color(0xFF666666),
-                    ),
-                    onSelected: (value) {
-                      if (value == 'gallery') {
-                        onPickImage();
-                      } else if (value == 'camera') {
-                        onTakePhoto();
-                      }
-                    },
-                    itemBuilder: (context) => const <PopupMenuEntry<String>>[
-                      PopupMenuItem<String>(
-                        value: 'gallery',
-                        child: Text('从相册选择'),
+              if (!recording)
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    PopupMenuButton<String>(
+                      tooltip: '发送图片',
+                      enabled: !sending && !recording,
+                      icon: const Icon(
+                        Icons.add_circle_outline,
+                        color: Color(0xFF666666),
                       ),
-                      PopupMenuItem<String>(value: 'camera', child: Text('拍照')),
-                    ],
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: controller,
-                      focusNode: focusNode,
-                      minLines: 1,
-                      maxLines: 4,
-                      enabled: !recording,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => onSend(),
-                      style: const TextStyle(fontSize: 15),
-                      decoration: InputDecoration(
-                        hintText: recording ? '正在录音...' : '输入消息...',
-                        filled: true,
-                        fillColor: const Color(0xFFF2F3F5),
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 10,
+                      onSelected: (value) {
+                        if (value == 'gallery') {
+                          onPickImage();
+                        } else if (value == 'camera') {
+                          onTakePhoto();
+                        }
+                      },
+                      itemBuilder: (context) => const <PopupMenuEntry<String>>[
+                        PopupMenuItem<String>(
+                          value: 'gallery',
+                          child: Text('从相册选择'),
                         ),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(20),
-                          borderSide: BorderSide.none,
+                        PopupMenuItem<String>(
+                          value: 'camera',
+                          child: Text('拍照'),
                         ),
-                      ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(width: 4),
-                  IconButton(
-                    onPressed: sending && !recording ? null : onRecord,
-                    icon: Icon(recording ? Icons.stop_circle : Icons.mic_none),
-                    color: recording
-                        ? const Color(0xFFC74444)
-                        : const Color(0xFF666666),
-                    tooltip: recording ? '停止录音' : '语音输入',
-                  ),
-                  const SizedBox(width: 2),
-                  ValueListenableBuilder<TextEditingValue>(
-                    valueListenable: controller,
-                    builder: (context, value, child) {
-                      final hasContent =
-                          value.text.trim().isNotEmpty ||
-                          selectedImagePath.isNotEmpty;
-                      final canSend = hasContent && !sending && !recording;
-                      return SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: Tooltip(
-                          message: '发送',
-                          child: FilledButton(
-                            onPressed: canSend ? onSend : null,
-                            style: FilledButton.styleFrom(
-                              padding: EdgeInsets.zero,
-                              shape: const CircleBorder(),
-                              backgroundColor: const Color(0xFFC74444),
-                              disabledBackgroundColor: const Color(0xFFE0E0E0),
-                              disabledForegroundColor: const Color(0xFF9E9E9E),
-                            ),
-                            child: sending && !recording
-                                ? const SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.white,
-                                    ),
-                                  )
-                                : const Icon(Icons.send_rounded, size: 20),
+                    Expanded(
+                      child: TextField(
+                        controller: controller,
+                        focusNode: focusNode,
+                        minLines: 1,
+                        maxLines: 4,
+                        enabled: !recording,
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => onSend(),
+                        style: const TextStyle(fontSize: 15),
+                        decoration: InputDecoration(
+                          hintText: recording ? '正在录音...' : '输入消息...',
+                          filled: true,
+                          fillColor: const Color(0xFFF2F3F5),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 10,
+                          ),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide.none,
                           ),
                         ),
-                      );
-                    },
-                  ),
-                ],
-              ),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    IconButton(
+                      onPressed: sending && !recording ? null : onRecord,
+                      icon: Icon(
+                        recording ? Icons.stop_circle : Icons.mic_none,
+                      ),
+                      color: recording
+                          ? const Color(0xFFC74444)
+                          : const Color(0xFF666666),
+                      tooltip: recording ? '停止录音' : '语音输入',
+                    ),
+                    const SizedBox(width: 2),
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: controller,
+                      builder: (context, value, child) {
+                        final hasContent =
+                            value.text.trim().isNotEmpty ||
+                            selectedImagePath.isNotEmpty;
+                        final canSend = hasContent && !sending && !recording;
+                        return SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: Tooltip(
+                            message: '发送',
+                            child: FilledButton(
+                              onPressed: canSend ? onSend : null,
+                              style: FilledButton.styleFrom(
+                                padding: EdgeInsets.zero,
+                                shape: const CircleBorder(),
+                                backgroundColor: const Color(0xFFC74444),
+                                disabledBackgroundColor: const Color(
+                                  0xFFE0E0E0,
+                                ),
+                                disabledForegroundColor: const Color(
+                                  0xFF9E9E9E,
+                                ),
+                              ),
+                              child: sending && !recording
+                                  ? const SizedBox(
+                                      width: 16,
+                                      height: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.send_rounded, size: 20),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ],
+                ),
             ],
           ),
         ),
       ),
     );
+  }
+}
+
+class _RecordingBanner extends StatelessWidget {
+  const _RecordingBanner({
+    required this.seconds,
+    required this.onCancel,
+    required this.onSend,
+  });
+
+  final int seconds;
+  final VoidCallback onCancel;
+  final VoidCallback onSend;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label: '正在录音',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFFF1F0),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: const Color(0xFFF3C8C2)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 9,
+              height: 9,
+              decoration: const BoxDecoration(
+                color: Color(0xFFC74444),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '正在录音  ${_formatDuration(seconds)}',
+                style: const TextStyle(
+                  fontSize: 13,
+                  color: Color(0xFF9A2E2A),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+            TextButton(onPressed: onCancel, child: const Text('取消')),
+            const SizedBox(width: 4),
+            FilledButton.icon(
+              onPressed: onSend,
+              style: FilledButton.styleFrom(
+                backgroundColor: const Color(0xFFC74444),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                minimumSize: const Size(0, 34),
+              ),
+              icon: const Icon(Icons.send_rounded, size: 16),
+              label: const Text('发送'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _formatDuration(int value) {
+    final minutes = (value ~/ 60).toString().padLeft(2, '0');
+    final seconds = (value % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 }
 
