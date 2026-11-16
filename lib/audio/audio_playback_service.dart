@@ -51,6 +51,11 @@ class AudioPlaybackService {
     _speakingController.add(false);
   }
 
+  Future<void> seek(Duration position) async {
+    await _player.seek(position);
+    this.position.value = position;
+  }
+
   Future<void> pause() async {
     await _player.pause();
     _speakingController.add(false);

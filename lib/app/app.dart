@@ -1234,6 +1234,13 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  Future<void> _seekAudio(ChatMessage message, Duration position) async {
+    if (_playingAudioKey != _messageKey(message)) {
+      return;
+    }
+    await _audioPlaybackService.seek(position);
+  }
+
   Future<void> _playMessageAudio(ChatMessage message) async {
     final key = _messageKey(message);
     final audioUrl = _apiClient.authorizedAudioUrl(message.audioUrl);
@@ -1717,6 +1724,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                         playingAudioKey: _playingAudioKey,
                         audioPosition: _audioPlaybackService.position,
                         audioDuration: _audioPlaybackService.duration,
+                        onSeekAudio: _seekAudio,
                         onOpenImage: _openImageViewer,
                         onPlayAudio: _playMessageAudio,
                         onDelete: _deleteMessage,
@@ -2114,6 +2122,7 @@ class _MessageList extends StatelessWidget {
     required this.playingAudioKey,
     required this.audioPosition,
     required this.audioDuration,
+    required this.onSeekAudio,
     required this.onOpenImage,
     required this.onPlayAudio,
     required this.onRetry,
@@ -2135,6 +2144,7 @@ class _MessageList extends StatelessWidget {
   final String playingAudioKey;
   final ValueListenable<Duration> audioPosition;
   final ValueListenable<Duration> audioDuration;
+  final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
@@ -2190,6 +2200,7 @@ class _MessageList extends StatelessWidget {
           playingAudioKey: playingAudioKey,
           audioPosition: audioPosition,
           audioDuration: audioDuration,
+          onSeekAudio: onSeekAudio,
           onOpenImage: onOpenImage,
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
@@ -2236,6 +2247,87 @@ class _EmptyChatView extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+class _AudioProgressBar extends StatefulWidget {
+  const _AudioProgressBar({
+    required this.position,
+    required this.duration,
+    required this.onSeek,
+  });
+
+  final Duration position;
+  final Duration duration;
+  final ValueChanged<Duration> onSeek;
+
+  @override
+  State<_AudioProgressBar> createState() => _AudioProgressBarState();
+}
+
+class _AudioProgressBarState extends State<_AudioProgressBar> {
+  double? _dragSeconds;
+
+  @override
+  Widget build(BuildContext context) {
+    final totalSeconds = widget.duration.inMilliseconds / 1000.0;
+    if (totalSeconds <= 0) {
+      return const SizedBox.shrink();
+    }
+    final positionSeconds = (widget.position.inMilliseconds / 1000.0)
+        .clamp(0.0, totalSeconds)
+        .toDouble();
+    final currentSeconds = _dragSeconds == null
+        ? positionSeconds
+        : _dragSeconds!.clamp(0.0, totalSeconds).toDouble();
+    return SizedBox(
+      width: 180,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SliderTheme(
+            data: SliderTheme.of(context).copyWith(
+              trackHeight: 3,
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+              activeTrackColor: const Color(0xFFC74444),
+              inactiveTrackColor: const Color(0xFFE6E6E6),
+              thumbColor: const Color(0xFFC74444),
+              overlayColor: const Color(0x22C74444),
+            ),
+            child: Slider(
+              value: currentSeconds,
+              max: totalSeconds,
+              onChanged: (value) {
+                setState(() {
+                  _dragSeconds = value;
+                });
+              },
+              onChangeEnd: (value) {
+                setState(() {
+                  _dragSeconds = null;
+                });
+                widget.onSeek(Duration(milliseconds: (value * 1000).round()));
+              },
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.only(left: 8),
+            child: Text(
+              '${_formatSeconds(currentSeconds)} / ${_formatSeconds(totalSeconds)}',
+              style: const TextStyle(fontSize: 10, color: Color(0xFF999999)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatSeconds(double value) {
+    final total = value.round().clamp(0, 24 * 3600);
+    final minutes = (total ~/ 60).toString().padLeft(2, '0');
+    final seconds = (total % 60).toString().padLeft(2, '0');
+    return '$minutes:$seconds';
   }
 }
 
@@ -2361,6 +2453,7 @@ class _MessageBubble extends StatelessWidget {
     required this.playingAudioKey,
     required this.audioPosition,
     required this.audioDuration,
+    required this.onSeekAudio,
     required this.onOpenImage,
     required this.onPlayAudio,
     required this.onRetry,
@@ -2381,6 +2474,7 @@ class _MessageBubble extends StatelessWidget {
   final String playingAudioKey;
   final ValueListenable<Duration> audioPosition;
   final ValueListenable<Duration> audioDuration;
+  final void Function(ChatMessage, Duration) onSeekAudio;
   final ValueChanged<String> onOpenImage;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
@@ -2640,12 +2734,6 @@ class _MessageBubble extends StatelessWidget {
               valueListenable: audioDuration,
               builder: (context, duration, _) {
                 final isPlaying = playingAudioKey == feedbackKey;
-                final totalMs = duration.inMilliseconds;
-                final progress = isPlaying && totalMs > 0
-                    ? (position.inMilliseconds / totalMs)
-                          .clamp(0.0, 1.0)
-                          .toDouble()
-                    : 0.0;
                 return Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
@@ -2670,27 +2758,12 @@ class _MessageBubble extends StatelessWidget {
                         style: const TextStyle(fontSize: 12),
                       ),
                     ),
-                    if (isPlaying && totalMs > 0) ...[
+                    if (isPlaying && duration.inMilliseconds > 0) ...[
                       const SizedBox(height: 2),
-                      SizedBox(
-                        width: 150,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
-                          child: LinearProgressIndicator(
-                            value: progress,
-                            minHeight: 3,
-                            backgroundColor: const Color(0xFFE6E6E6),
-                            color: const Color(0xFFC74444),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        '${_formatAudioTime(position)} / ${_formatAudioTime(duration)}',
-                        style: const TextStyle(
-                          fontSize: 10,
-                          color: Color(0xFF999999),
-                        ),
+                      _AudioProgressBar(
+                        position: position,
+                        duration: duration,
+                        onSeek: (value) => onSeekAudio(message, value),
                       ),
                     ],
                   ],
@@ -2818,12 +2891,6 @@ class _MessageBubble extends StatelessWidget {
         ],
       ),
     );
-  }
-
-  String _formatAudioTime(Duration value) {
-    final minutes = value.inMinutes.toString().padLeft(2, '0');
-    final seconds = (value.inSeconds % 60).toString().padLeft(2, '0');
-    return '$minutes:$seconds';
   }
 
   ({String duration, String transcript})? _parseVoice(String text) {
