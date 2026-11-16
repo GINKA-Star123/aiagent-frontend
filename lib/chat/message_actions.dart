@@ -12,6 +12,7 @@ class MessageActions {
     ValueChanged<ChatMessage>? onRetry,
     ValueChanged<ChatMessage>? onDelete,
     ValueChanged<ChatMessage>? onQuote,
+    ValueChanged<ChatMessage>? onSelect,
   }) async {
     final hasAudio = message.audioUrl.isNotEmpty;
 
@@ -23,6 +24,15 @@ class MessageActions {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (onSelect != null)
+                ListTile(
+                  leading: const Icon(Icons.checklist),
+                  title: const Text('多选'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    onSelect(message);
+                  },
+                ),
               if (message.status == ChatMessageStatus.failed ||
                   message.status == ChatMessageStatus.queued)
                 ListTile(

@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
@@ -44,6 +45,16 @@ import '../settings/app_preferences.dart';
 import '../settings/settings_page.dart';
 import '../theme/app_theme.dart';
 import '../voice_call/voice_call_page.dart';
+
+String _selectionKeyFor(ChatMessage message) {
+  final key = message.requestId.isNotEmpty
+      ? message.requestId
+      : message.clientMessageId;
+  if (key.isNotEmpty) {
+    return key;
+  }
+  return '${message.createdAt.microsecondsSinceEpoch}:${message.text.hashCode}';
+}
 
 class AiAgentApp extends StatelessWidget {
   const AiAgentApp({super.key});
@@ -136,6 +147,8 @@ class _ChatHomePageState extends State<ChatHomePage>
   final FocusNode _composerFocus = FocusNode();
   String _statusText = '正在初始化...';
   String _selectedImagePath = '';
+  bool _selectionMode = false;
+  final Set<String> _selectedMessageKeys = {};
 
   @override
   void initState() {
@@ -385,6 +398,8 @@ class _ChatHomePageState extends State<ChatHomePage>
       _selectedImagePath = '';
       _quotedMessage = null;
       _audioResumePositions.clear();
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
       _myAvatarPath = '';
       _agentAvatarPath = '';
       _backgroundPath = '';
@@ -1164,6 +1179,123 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _historyStore.save(nextMessages);
   }
 
+  List<ChatMessage> get _selectedMessages {
+    return _messages
+        .where(
+          (message) => _selectedMessageKeys.contains(_selectionKeyFor(message)),
+        )
+        .toList();
+  }
+
+  void _startSelection(ChatMessage message) {
+    _composerFocus.unfocus();
+    setState(() {
+      _selectionMode = true;
+      _selectedMessageKeys
+        ..clear()
+        ..add(_selectionKeyFor(message));
+    });
+  }
+
+  void _toggleSelection(ChatMessage message) {
+    final key = _selectionKeyFor(message);
+    setState(() {
+      if (_selectedMessageKeys.contains(key)) {
+        _selectedMessageKeys.remove(key);
+      } else {
+        _selectedMessageKeys.add(key);
+      }
+    });
+  }
+
+  void _cancelSelection() {
+    setState(() {
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
+    });
+  }
+
+  Future<void> _copySelectedMessages() async {
+    final selected = _selectedMessages;
+    if (selected.isEmpty) {
+      return;
+    }
+    final buffer = StringBuffer();
+    for (final message in selected) {
+      final sender = message.role == ChatRole.user
+          ? '我'
+          : (message.role == ChatRole.system ? '系统' : 'AIAgent');
+      buffer.writeln('$sender：${message.text}');
+    }
+    await Clipboard.setData(ClipboardData(text: buffer.toString().trim()));
+    if (!mounted) {
+      return;
+    }
+    final count = selected.length;
+    setState(() {
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
+      _statusText = '已复制 $count 条消息';
+    });
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('已复制 $count 条消息')));
+  }
+
+  Future<void> _deleteSelectedMessages() async {
+    final selected = _selectedMessages;
+    if (selected.isEmpty) {
+      return;
+    }
+    final count = selected.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text('删除 $count 条消息'),
+          content: const Text('只删除本机记录，不影响服务器。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+    final keys = selected.map(_selectionKeyFor).toSet();
+    for (final message in selected) {
+      if (message.clientMessageId.isNotEmpty) {
+        await _removeFromOutbox(message.clientMessageId);
+      }
+      _audioResumePositions.remove(_messageKey(message));
+    }
+    if (_playingAudioKey.isNotEmpty && keys.contains(_playingAudioKey)) {
+      await _audioPlaybackService.stop();
+    }
+    if (!mounted) {
+      return;
+    }
+    final remaining = _messages
+        .where((message) => !keys.contains(_selectionKeyFor(message)))
+        .toList();
+    setState(() {
+      _messages = remaining;
+      _playingAudioKey = '';
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
+      _statusText = '已删除 $count 条消息';
+    });
+    await _historyStore.save(remaining);
+  }
+
   String _messageKey(ChatMessage message) {
     return message.requestId.isNotEmpty
         ? message.requestId
@@ -1688,6 +1820,8 @@ class _ChatHomePageState extends State<ChatHomePage>
       _selectedImagePath = '';
       _quotedMessage = null;
       _audioResumePositions.clear();
+      _selectionMode = false;
+      _selectedMessageKeys.clear();
       _statusText = '聊天历史已清空';
     });
   }
@@ -1765,19 +1899,27 @@ class _ChatHomePageState extends State<ChatHomePage>
           SafeArea(
             child: Column(
               children: [
-                _ChatHeader(
-                  title: 'AIAgent',
-                  agentAvatarPath: _agentAvatarPath,
-                  onAvatarTap: _openSettingsPage,
-                  statusText: _headerStatusText(),
-                  online: _online,
-                  speaking: _speaking,
-                  onOpenVoiceCall: _openVoiceCallPage,
-                  onOpenSettings: _openSettingsPage,
-                  onSearch: _openChatSearch,
-                  onCheckHealth: () => _checkHealth(),
-                  onStopAudio: _stopAudio,
-                ),
+                if (_selectionMode)
+                  _SelectionHeader(
+                    count: _selectedMessageKeys.length,
+                    onCancel: _cancelSelection,
+                    onCopy: _copySelectedMessages,
+                    onDelete: _deleteSelectedMessages,
+                  )
+                else
+                  _ChatHeader(
+                    title: 'AIAgent',
+                    agentAvatarPath: _agentAvatarPath,
+                    onAvatarTap: _openSettingsPage,
+                    statusText: _headerStatusText(),
+                    online: _online,
+                    speaking: _speaking,
+                    onOpenVoiceCall: _openVoiceCallPage,
+                    onOpenSettings: _openSettingsPage,
+                    onSearch: _openChatSearch,
+                    onCheckHealth: () => _checkHealth(),
+                    onStopAudio: _stopAudio,
+                  ),
                 Expanded(
                   child: Stack(
                     children: [
@@ -1789,6 +1931,8 @@ class _ChatHomePageState extends State<ChatHomePage>
                         feedback: _feedback,
                         fontSize: _chatFontSize,
                         compactAvatars: _compactAvatars,
+                        selectionMode: _selectionMode,
+                        selectedMessageKeys: _selectedMessageKeys,
                         myAvatarPath: _myAvatarPath,
                         agentAvatarPath: _agentAvatarPath,
                         typing:
@@ -1807,10 +1951,12 @@ class _ChatHomePageState extends State<ChatHomePage>
                         onPlayAudio: _playMessageAudio,
                         onDelete: _deleteMessage,
                         onQuote: _quoteMessage,
+                        onSelect: _startSelection,
+                        onToggleSelect: _toggleSelection,
                         onRetry: _retryMessage,
                         onFeedback: _sendFeedback,
                       ),
-                      if (_showJumpToBottom)
+                      if (_showJumpToBottom && !_selectionMode)
                         Positioned(
                           right: 12,
                           bottom: 12,
@@ -1827,31 +1973,32 @@ class _ChatHomePageState extends State<ChatHomePage>
                     ],
                   ),
                 ),
-                _InputBar(
-                  controller: _textController,
-                  focusNode: _composerFocus,
-                  quotedText: _quotedMessage?.text ?? '',
-                  quotedSender: _quotedMessage == null
-                      ? ''
-                      : (_quotedMessage!.role == ChatRole.user
-                            ? '我'
-                            : 'AIAgent'),
-                  onCancelQuote: () {
-                    setState(() {
-                      _quotedMessage = null;
-                    });
-                  },
-                  sending: _sending,
-                  recording: _recording,
-                  recordingSeconds: _recordingSeconds,
-                  onCancelRecording: _cancelRecording,
-                  selectedImagePath: _selectedImagePath,
-                  onSend: _sendMessage,
-                  onRecord: _toggleRecording,
-                  onPickImage: _pickImageFromGallery,
-                  onTakePhoto: _takePhoto,
-                  onClearImage: _clearSelectedImage,
-                ),
+                if (!_selectionMode)
+                  _InputBar(
+                    controller: _textController,
+                    focusNode: _composerFocus,
+                    quotedText: _quotedMessage?.text ?? '',
+                    quotedSender: _quotedMessage == null
+                        ? ''
+                        : (_quotedMessage!.role == ChatRole.user
+                              ? '我'
+                              : 'AIAgent'),
+                    onCancelQuote: () {
+                      setState(() {
+                        _quotedMessage = null;
+                      });
+                    },
+                    sending: _sending,
+                    recording: _recording,
+                    recordingSeconds: _recordingSeconds,
+                    onCancelRecording: _cancelRecording,
+                    selectedImagePath: _selectedImagePath,
+                    onSend: _sendMessage,
+                    onRecord: _toggleRecording,
+                    onPickImage: _pickImageFromGallery,
+                    onTakePhoto: _takePhoto,
+                    onClearImage: _clearSelectedImage,
+                  ),
               ],
             ),
           ),
@@ -2145,6 +2292,60 @@ class _ChatHeader extends StatelessWidget {
   }
 }
 
+class _SelectionHeader extends StatelessWidget {
+  const _SelectionHeader({
+    required this.count,
+    required this.onCancel,
+    required this.onCopy,
+    required this.onDelete,
+  });
+
+  final int count;
+  final VoidCallback onCancel;
+  final VoidCallback onCopy;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 56,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        border: Border(bottom: BorderSide(color: Color(0xFFE6E6E6))),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            tooltip: '取消多选',
+            onPressed: onCancel,
+            icon: const Icon(Icons.close, color: Color(0xFF444444)),
+          ),
+          Text(
+            '已选 $count 条',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF222222),
+            ),
+          ),
+          const Spacer(),
+          IconButton(
+            tooltip: '复制所选',
+            onPressed: count > 0 ? onCopy : null,
+            icon: const Icon(Icons.copy_outlined),
+          ),
+          IconButton(
+            tooltip: '删除所选',
+            onPressed: count > 0 ? onDelete : null,
+            icon: const Icon(Icons.delete_outline, color: Color(0xFFB3261E)),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _ChatAvatar extends StatelessWidget {
   const _ChatAvatar({
     required this.label,
@@ -2213,6 +2414,8 @@ class _MessageList extends StatelessWidget {
     required this.feedback,
     required this.fontSize,
     required this.compactAvatars,
+    required this.selectionMode,
+    required this.selectedMessageKeys,
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.typing,
@@ -2229,6 +2432,8 @@ class _MessageList extends StatelessWidget {
     required this.onFeedback,
     required this.onDelete,
     required this.onQuote,
+    required this.onSelect,
+    required this.onToggleSelect,
   });
 
   final List<ChatMessage> messages;
@@ -2238,6 +2443,8 @@ class _MessageList extends StatelessWidget {
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
   final bool compactAvatars;
+  final bool selectionMode;
+  final Set<String> selectedMessageKeys;
   final String myAvatarPath;
   final String agentAvatarPath;
   final bool typing;
@@ -2254,6 +2461,8 @@ class _MessageList extends StatelessWidget {
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
   final ValueChanged<ChatMessage> onDelete;
   final ValueChanged<ChatMessage> onQuote;
+  final ValueChanged<ChatMessage> onSelect;
+  final ValueChanged<ChatMessage> onToggleSelect;
 
   static bool _sameDay(DateTime a, DateTime b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
@@ -2293,6 +2502,10 @@ class _MessageList extends StatelessWidget {
           showTime: showTime,
           compact: compact,
           hideAvatar: compactAvatars && compact,
+          selectionMode: selectionMode,
+          selected:
+              selectionMode &&
+              selectedMessageKeys.contains(_selectionKeyFor(message)),
           highlighted:
               highlightedMessageKey.isNotEmpty &&
               highlightedMessageKey == messageKey,
@@ -2313,6 +2526,8 @@ class _MessageList extends StatelessWidget {
           onFeedback: onFeedback,
           onDelete: onDelete,
           onQuote: onQuote,
+          onSelect: onSelect,
+          onToggleSelect: onToggleSelect,
         );
       },
     );
@@ -2352,6 +2567,21 @@ class _EmptyChatView extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _SelectionDot extends StatelessWidget {
+  const _SelectionDot({required this.selected});
+
+  final bool selected;
+
+  @override
+  Widget build(BuildContext context) {
+    return Icon(
+      selected ? Icons.check_circle : Icons.radio_button_unchecked,
+      size: 20,
+      color: selected ? const Color(0xFFC74444) : Colors.black26,
     );
   }
 }
@@ -2551,6 +2781,8 @@ class _MessageBubble extends StatelessWidget {
     required this.showTime,
     required this.compact,
     required this.hideAvatar,
+    required this.selectionMode,
+    required this.selected,
     required this.highlighted,
     required this.feedback,
     required this.fontSize,
@@ -2569,12 +2801,16 @@ class _MessageBubble extends StatelessWidget {
     required this.onFeedback,
     required this.onDelete,
     required this.onQuote,
+    required this.onSelect,
+    required this.onToggleSelect,
   });
 
   final ChatMessage message;
   final bool showTime;
   final bool compact;
   final bool hideAvatar;
+  final bool selectionMode;
+  final bool selected;
   final bool highlighted;
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
@@ -2593,6 +2829,8 @@ class _MessageBubble extends StatelessWidget {
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
   final ValueChanged<ChatMessage> onDelete;
   final ValueChanged<ChatMessage> onQuote;
+  final ValueChanged<ChatMessage> onSelect;
+  final ValueChanged<ChatMessage> onToggleSelect;
 
   @override
   Widget build(BuildContext context) {
@@ -2638,18 +2876,23 @@ class _MessageBubble extends StatelessWidget {
     final currentRating = feedbackEntry?['rating'];
 
     final bubble = GestureDetector(
-      onTap: needsRetry ? () => onRetry(message) : null,
-      onLongPress: () {
-        MessageActions.show(
-          context: context,
-          message: message,
-          playing: playingAudioKey == feedbackKey,
-          onPlayAudio: onPlayAudio,
-          onRetry: onRetry,
-          onDelete: onDelete,
-          onQuote: onQuote,
-        );
-      },
+      onTap: selectionMode
+          ? null
+          : (needsRetry ? () => onRetry(message) : null),
+      onLongPress: selectionMode
+          ? null
+          : () {
+              MessageActions.show(
+                context: context,
+                message: message,
+                playing: playingAudioKey == feedbackKey,
+                onPlayAudio: onPlayAudio,
+                onRetry: onRetry,
+                onDelete: onDelete,
+                onQuote: onQuote,
+                onSelect: onSelect,
+              );
+            },
       child: Container(
         constraints: BoxConstraints(
           maxWidth: MediaQuery.sizeOf(context).width * 0.68,
@@ -2981,45 +3224,57 @@ class _MessageBubble extends StatelessWidget {
             ),
             const SizedBox(height: 8),
           ],
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisAlignment: isUser
-                ? MainAxisAlignment.end
-                : MainAxisAlignment.start,
-            children: [
-              if (!isUser) ...[
-                if (hideAvatar)
-                  const SizedBox(width: 36)
-                else
-                  _ChatAvatar(
-                    label: '绫',
-                    isUser: false,
-                    size: 36,
-                    imagePath: agentAvatarPath,
+          GestureDetector(
+            onTap: selectionMode ? () => onToggleSelect(message) : null,
+            behavior: HitTestBehavior.opaque,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: isUser
+                  ? MainAxisAlignment.end
+                  : MainAxisAlignment.start,
+              children: [
+                if (selectionMode && !isUser) ...[
+                  _SelectionDot(selected: selected),
+                  const SizedBox(width: 6),
+                ],
+                if (!isUser) ...[
+                  if (hideAvatar)
+                    const SizedBox(width: 36)
+                  else
+                    _ChatAvatar(
+                      label: '绫',
+                      isUser: false,
+                      size: 36,
+                      imagePath: agentAvatarPath,
+                    ),
+                  const SizedBox(width: 8),
+                ],
+                Flexible(
+                  child: Column(
+                    crossAxisAlignment: isUser
+                        ? CrossAxisAlignment.end
+                        : CrossAxisAlignment.start,
+                    children: [accessibleBubble, if (!selectionMode) ...extras],
                   ),
-                const SizedBox(width: 8),
-              ],
-              Flexible(
-                child: Column(
-                  crossAxisAlignment: isUser
-                      ? CrossAxisAlignment.end
-                      : CrossAxisAlignment.start,
-                  children: [accessibleBubble, ...extras],
                 ),
-              ),
-              if (isUser) ...[
-                const SizedBox(width: 8),
-                if (hideAvatar)
-                  const SizedBox(width: 36)
-                else
-                  _ChatAvatar(
-                    label: '我',
-                    isUser: true,
-                    size: 36,
-                    imagePath: myAvatarPath,
-                  ),
+                if (isUser) ...[
+                  const SizedBox(width: 8),
+                  if (hideAvatar)
+                    const SizedBox(width: 36)
+                  else
+                    _ChatAvatar(
+                      label: '我',
+                      isUser: true,
+                      size: 36,
+                      imagePath: myAvatarPath,
+                    ),
+                ],
+                if (selectionMode && isUser) ...[
+                  const SizedBox(width: 6),
+                  _SelectionDot(selected: selected),
+                ],
               ],
-            ],
+            ),
           ),
         ],
       ),
