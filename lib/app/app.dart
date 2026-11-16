@@ -29,6 +29,7 @@ import '../identity/identity_store.dart';
 import '../identity/user_identity.dart';
 import '../memory/memory_page.dart';
 import '../profile/avatar_store.dart';
+import '../profile/background_store.dart';
 import '../profile/profile_page.dart';
 import '../session/presence_opening_gate.dart';
 import '../settings/app_preferences.dart';
@@ -76,6 +77,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   Map<String, Map<String, dynamic>> _feedback = {};
   String _myAvatarPath = '';
   String _agentAvatarPath = '';
+  String _backgroundPath = '';
   TelemetryService? _telemetry;
 
   final Uuid _uuid = const Uuid();
@@ -313,6 +315,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _selectedImagePath = '';
       _myAvatarPath = '';
       _agentAvatarPath = '';
+      _backgroundPath = '';
       _sending = false;
       _recording = false;
       _speaking = false;
@@ -1131,7 +1134,9 @@ class _ChatHomePageState extends State<ChatHomePage>
             userId: _identity?.userId ?? '',
             myAvatarPath: _myAvatarPath,
             agentAvatarPath: _agentAvatarPath,
+            backgroundPath: _backgroundPath,
             onAvatarsChanged: _loadAvatars,
+            onBackgroundChanged: _loadAvatars,
             apiBaseUrl: _apiConfig.apiBaseUrl,
             username: _identity?.username ?? '未登录',
             statusText: _statusText,
@@ -1282,12 +1287,14 @@ class _ChatHomePageState extends State<ChatHomePage>
       identity.userId,
       AvatarOwner.agent,
     );
+    final background = await BackgroundStore.load(identity.userId);
     if (!mounted) {
       return;
     }
     setState(() {
       _myAvatarPath = myAvatar;
       _agentAvatarPath = agentAvatar;
+      _backgroundPath = background;
     });
   }
 
@@ -1325,47 +1332,79 @@ class _ChatHomePageState extends State<ChatHomePage>
 
     return Scaffold(
       backgroundColor: const Color(0xFFF2F3F5),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _ChatHeader(
-              title: 'AIAgent',
-              agentAvatarPath: _agentAvatarPath,
-              onAvatarTap: _openSettingsPage,
-              statusText: _headerStatusText(),
-              online: _online,
-              speaking: _speaking,
-              onOpenVoiceCall: _openVoiceCallPage,
-              onOpenSettings: _openSettingsPage,
-              onCheckHealth: () => _checkHealth(),
-              onStopAudio: _audioPlaybackService.stop,
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          _ChatBackground(imagePath: _backgroundPath),
+          SafeArea(
+            child: Column(
+              children: [
+                _ChatHeader(
+                  title: 'AIAgent',
+                  agentAvatarPath: _agentAvatarPath,
+                  onAvatarTap: _openSettingsPage,
+                  statusText: _headerStatusText(),
+                  online: _online,
+                  speaking: _speaking,
+                  onOpenVoiceCall: _openVoiceCallPage,
+                  onOpenSettings: _openSettingsPage,
+                  onCheckHealth: () => _checkHealth(),
+                  onStopAudio: _audioPlaybackService.stop,
+                ),
+                Expanded(
+                  child: _MessageList(
+                    messages: _messages,
+                    controller: _scrollController,
+                    feedback: _feedback,
+                    myAvatarPath: _myAvatarPath,
+                    agentAvatarPath: _agentAvatarPath,
+                    onPlayAudio: _playMessageAudio,
+                    onRetry: _retryMessage,
+                    onFeedback: _sendFeedback,
+                  ),
+                ),
+                _InputBar(
+                  controller: _textController,
+                  sending: _sending,
+                  recording: _recording,
+                  selectedImagePath: _selectedImagePath,
+                  onSend: _sendMessage,
+                  onRecord: _toggleRecording,
+                  onPickImage: _pickImageFromGallery,
+                  onTakePhoto: _takePhoto,
+                  onClearImage: _clearSelectedImage,
+                ),
+              ],
             ),
-            Expanded(
-              child: _MessageList(
-                messages: _messages,
-                controller: _scrollController,
-                feedback: _feedback,
-                myAvatarPath: _myAvatarPath,
-                agentAvatarPath: _agentAvatarPath,
-                onPlayAudio: _playMessageAudio,
-                onRetry: _retryMessage,
-                onFeedback: _sendFeedback,
-              ),
-            ),
-            _InputBar(
-              controller: _textController,
-              sending: _sending,
-              recording: _recording,
-              selectedImagePath: _selectedImagePath,
-              onSend: _sendMessage,
-              onRecord: _toggleRecording,
-              onPickImage: _pickImageFromGallery,
-              onTakePhoto: _takePhoto,
-              onClearImage: _clearSelectedImage,
-            ),
-          ],
-        ),
+          ),
+        ],
       ),
+    );
+  }
+}
+
+class _ChatBackground extends StatelessWidget {
+  const _ChatBackground({required this.imagePath});
+
+  final String imagePath;
+
+  @override
+  Widget build(BuildContext context) {
+    const fallback = ColoredBox(color: Color(0xFFF2F3F5));
+    final path = imagePath.trim();
+    if (path.isEmpty || !File(path).existsSync()) {
+      return fallback;
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.file(
+          File(path),
+          fit: BoxFit.cover,
+          errorBuilder: (context, error, stackTrace) => fallback,
+        ),
+        ColoredBox(color: Colors.white.withValues(alpha: 0.62)),
+      ],
     );
   }
 }

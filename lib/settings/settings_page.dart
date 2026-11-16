@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../profile/avatar_store.dart';
+import '../profile/background_store.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
@@ -11,7 +12,9 @@ class SettingsPage extends StatefulWidget {
     required this.userId,
     required this.myAvatarPath,
     required this.agentAvatarPath,
+    required this.backgroundPath,
     required this.onAvatarsChanged,
+    required this.onBackgroundChanged,
     required this.apiBaseUrl,
     required this.username,
     required this.statusText,
@@ -29,7 +32,9 @@ class SettingsPage extends StatefulWidget {
   final String userId;
   final String myAvatarPath;
   final String agentAvatarPath;
+  final String backgroundPath;
   final Future<void> Function() onAvatarsChanged;
+  final Future<void> Function() onBackgroundChanged;
   final String apiBaseUrl;
   final String username;
   final String statusText;
@@ -57,8 +62,10 @@ class _SettingsPageState extends State<SettingsPage> {
   late bool _autoPlayVoice;
   late String _myAvatarPath;
   late String _agentAvatarPath;
+  late String _backgroundPath;
   final ImagePicker _imagePicker = ImagePicker();
   bool _pickingAvatar = false;
+  bool _pickingBackground = false;
 
   @override
   void initState() {
@@ -67,6 +74,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _autoPlayVoice = widget.autoPlayVoice;
     _myAvatarPath = widget.myAvatarPath;
     _agentAvatarPath = widget.agentAvatarPath;
+    _backgroundPath = widget.backgroundPath;
   }
 
   @override
@@ -314,6 +322,86 @@ class _SettingsPageState extends State<SettingsPage> {
     await widget.onAvatarsChanged();
   }
 
+  Future<void> _pickBackground() async {
+    if (_pickingBackground || widget.userId.isEmpty) {
+      return;
+    }
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('从相册选择'),
+                onTap: () =>
+                    Navigator.of(sheetContext).pop(ImageSource.gallery),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('拍照'),
+                onTap: () => Navigator.of(sheetContext).pop(ImageSource.camera),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (source == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _pickingBackground = true;
+    });
+    try {
+      final picked = await _imagePicker.pickImage(
+        source: source,
+        maxWidth: 1600,
+        maxHeight: 1600,
+        imageQuality: 90,
+      );
+      if (picked == null) {
+        return;
+      }
+      final path = await BackgroundStore.save(widget.userId, picked.path);
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _backgroundPath = path;
+      });
+      await widget.onBackgroundChanged();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('背景更新失败：$error')));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _pickingBackground = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _resetBackground() async {
+    await BackgroundStore.reset(widget.userId);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _backgroundPath = '';
+    });
+    await widget.onBackgroundChanged();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -346,6 +434,17 @@ class _SettingsPageState extends State<SettingsPage> {
                 onReset: _agentAvatarPath.isEmpty
                     ? null
                     : () => _resetAvatar(AvatarOwner.agent),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          _SettingsSection(
+            title: '聊天背景',
+            children: [
+              _BackgroundSettingTile(
+                imagePath: _backgroundPath,
+                onPick: _pickBackground,
+                onReset: _backgroundPath.isEmpty ? null : _resetBackground,
               ),
             ],
           ),
@@ -484,6 +583,70 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _BackgroundSettingTile extends StatelessWidget {
+  const _BackgroundSettingTile({
+    required this.imagePath,
+    required this.onPick,
+    this.onReset,
+  });
+
+  final String imagePath;
+  final VoidCallback onPick;
+  final VoidCallback? onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = imagePath.isNotEmpty && File(imagePath).existsSync();
+    return Row(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: SizedBox(
+            width: 64,
+            height: 64,
+            child: hasImage
+                ? Image.file(
+                    File(imagePath),
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return const ColoredBox(
+                        color: Color(0xFFE9ECEF),
+                        child: Icon(Icons.wallpaper),
+                      );
+                    },
+                  )
+                : const ColoredBox(
+                    color: Color(0xFFE9ECEF),
+                    child: Icon(Icons.wallpaper),
+                  ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        const Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('自定义背景', style: TextStyle(fontWeight: FontWeight.w600)),
+              SizedBox(height: 2),
+              Text(
+                '仅显示在聊天消息区域',
+                style: TextStyle(fontSize: 12, color: Colors.black54),
+              ),
+            ],
+          ),
+        ),
+        TextButton(onPressed: onPick, child: const Text('更换')),
+        if (onReset != null)
+          IconButton(
+            tooltip: '恢复默认',
+            onPressed: onReset,
+            icon: const Icon(Icons.restart_alt),
+          ),
+      ],
     );
   }
 }
