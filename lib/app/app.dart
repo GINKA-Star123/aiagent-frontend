@@ -1648,6 +1648,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                           bottom: 12,
                           child: FloatingActionButton.small(
                             heroTag: null,
+                            tooltip: '回到底部',
                             backgroundColor: Colors.white,
                             foregroundColor: const Color(0xFF666666),
                             elevation: 2,
@@ -1767,13 +1768,17 @@ class _ChatHeader extends StatelessWidget {
       ),
       child: Row(
         children: [
-          GestureDetector(
-            onTap: onAvatarTap,
-            child: _ChatAvatar(
-              label: '绫',
-              isUser: false,
-              size: 36,
-              imagePath: agentAvatarPath,
+          Semantics(
+            button: true,
+            label: '打开设置',
+            child: GestureDetector(
+              onTap: onAvatarTap,
+              child: _ChatAvatar(
+                label: '绫',
+                isUser: false,
+                size: 36,
+                imagePath: agentAvatarPath,
+              ),
             ),
           ),
           const SizedBox(width: 10),
@@ -1872,6 +1877,7 @@ class _ChatAvatar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final semanticLabel = isUser ? '我的头像' : 'AIAgent 头像';
     final fallback = Container(
       width: size,
       height: size,
@@ -1898,20 +1904,20 @@ class _ChatAvatar extends StatelessWidget {
     );
 
     final path = imagePath.trim();
-    if (path.isEmpty) {
-      return fallback;
-    }
-    return SizedBox(
-      width: size,
-      height: size,
-      child: ClipOval(
-        child: Image.file(
-          File(path),
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => fallback,
-        ),
-      ),
-    );
+    final Widget avatar = path.isEmpty
+        ? fallback
+        : SizedBox(
+            width: size,
+            height: size,
+            child: ClipOval(
+              child: Image.file(
+                File(path),
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stackTrace) => fallback,
+              ),
+            ),
+          );
+    return Semantics(image: true, label: semanticLabel, child: avatar);
   }
 }
 
@@ -2067,67 +2073,80 @@ class _TypingIndicatorState extends State<_TypingIndicator>
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: 6, bottom: 10),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _ChatAvatar(
-            label: '绫',
-            isUser: false,
-            size: 36,
-            imagePath: widget.agentAvatarPath,
-          ),
-          const SizedBox(width: 8),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: const BorderRadius.only(
-                topLeft: Radius.circular(4),
-                topRight: Radius.circular(14),
-                bottomLeft: Radius.circular(14),
-                bottomRight: Radius.circular(14),
+    return Semantics(
+      container: true,
+      liveRegion: true,
+      label: 'AIAgent 正在输入',
+      child: ExcludeSemantics(
+        child: Padding(
+          padding: const EdgeInsets.only(top: 6, bottom: 10),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _ChatAvatar(
+                label: '绫',
+                isUser: false,
+                size: 36,
+                imagePath: widget.agentAvatarPath,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.04),
-                  blurRadius: 6,
-                  offset: const Offset(0, 2),
+              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 11,
                 ),
-              ],
-            ),
-            child: AnimatedBuilder(
-              animation: _controller,
-              builder: (context, child) {
-                return Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    for (var index = 0; index < 3; index++) ...[
-                      if (index > 0) const SizedBox(width: 5),
-                      Opacity(
-                        opacity: _dotOpacity(index),
-                        child: Container(
-                          width: 7,
-                          height: 7,
-                          decoration: const BoxDecoration(
-                            color: Color(0xFF999999),
-                            shape: BoxShape.circle,
-                          ),
-                        ),
-                      ),
-                    ],
-                    const SizedBox(width: 10),
-                    const Text(
-                      '正在输入',
-                      style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(4),
+                    topRight: Radius.circular(14),
+                    bottomLeft: Radius.circular(14),
+                    bottomRight: Radius.circular(14),
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 6,
+                      offset: const Offset(0, 2),
                     ),
                   ],
-                );
-              },
-            ),
+                ),
+                child: AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, child) {
+                    return Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        for (var index = 0; index < 3; index++) ...[
+                          if (index > 0) const SizedBox(width: 5),
+                          Opacity(
+                            opacity: _dotOpacity(index),
+                            child: Container(
+                              width: 7,
+                              height: 7,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF999999),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                        ],
+                        const SizedBox(width: 10),
+                        const Text(
+                          '正在输入',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Color(0xFF999999),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -2320,6 +2339,32 @@ class _MessageBubble extends StatelessWidget {
       ),
     );
 
+    final semanticParts = <String>[
+      isUser ? '我说：' : 'AIAgent 说：',
+      bodyText.trim().isEmpty ? '图片' : bodyText.trim(),
+    ];
+    if (quoted != null) {
+      semanticParts.add('引用：${quoted.quote}');
+    }
+    if (imagePath.isNotEmpty) {
+      semanticParts.add('包含图片');
+    }
+    if (message.status == ChatMessageStatus.failed) {
+      semanticParts.add('发送失败');
+    } else if (message.status == ChatMessageStatus.queued) {
+      semanticParts.add('待发送');
+    }
+    if (message.isDegraded) {
+      semanticParts.add('降级回复');
+    }
+    final accessibleBubble = Semantics(
+      container: true,
+      button: needsRetry,
+      label: semanticParts.join('。'),
+      onTap: needsRetry ? () => onRetry(message) : null,
+      child: ExcludeSemantics(child: bubble),
+    );
+
     final extras = <Widget>[
       if (needsRetry) ...[
         const SizedBox(height: 4),
@@ -2392,6 +2437,7 @@ class _MessageBubble extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           children: [
             IconButton(
+              tooltip: '有帮助',
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
@@ -2405,6 +2451,7 @@ class _MessageBubble extends StatelessWidget {
               onPressed: () => onFeedback(message, 1, const []),
             ),
             IconButton(
+              tooltip: '没有帮助',
               visualDensity: VisualDensity.compact,
               padding: EdgeInsets.zero,
               constraints: const BoxConstraints(minWidth: 30, minHeight: 30),
@@ -2479,7 +2526,7 @@ class _MessageBubble extends StatelessWidget {
                   crossAxisAlignment: isUser
                       ? CrossAxisAlignment.end
                       : CrossAxisAlignment.start,
-                  children: [bubble, ...extras],
+                  children: [accessibleBubble, ...extras],
                 ),
               ),
               if (isUser) ...[
@@ -2550,6 +2597,7 @@ class _MessageBubble extends StatelessWidget {
                 top: 0,
                 right: 0,
                 child: IconButton(
+                  tooltip: '关闭',
                   onPressed: () => Navigator.of(dialogContext).pop(),
                   icon: const Icon(Icons.close, color: Colors.white),
                 ),
@@ -2745,25 +2793,28 @@ class _InputBar extends StatelessWidget {
                       return SizedBox(
                         width: 40,
                         height: 40,
-                        child: FilledButton(
-                          onPressed: canSend ? onSend : null,
-                          style: FilledButton.styleFrom(
-                            padding: EdgeInsets.zero,
-                            shape: const CircleBorder(),
-                            backgroundColor: const Color(0xFFC74444),
-                            disabledBackgroundColor: const Color(0xFFE0E0E0),
-                            disabledForegroundColor: const Color(0xFF9E9E9E),
+                        child: Tooltip(
+                          message: '发送',
+                          child: FilledButton(
+                            onPressed: canSend ? onSend : null,
+                            style: FilledButton.styleFrom(
+                              padding: EdgeInsets.zero,
+                              shape: const CircleBorder(),
+                              backgroundColor: const Color(0xFFC74444),
+                              disabledBackgroundColor: const Color(0xFFE0E0E0),
+                              disabledForegroundColor: const Color(0xFF9E9E9E),
+                            ),
+                            child: sending && !recording
+                                ? const SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.white,
+                                    ),
+                                  )
+                                : const Icon(Icons.send_rounded, size: 20),
                           ),
-                          child: sending && !recording
-                              ? const SizedBox(
-                                  width: 16,
-                                  height: 16,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                    color: Colors.white,
-                                  ),
-                                )
-                              : const Icon(Icons.send_rounded, size: 20),
                         ),
                       );
                     },
