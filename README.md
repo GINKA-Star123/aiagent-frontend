@@ -5,7 +5,7 @@ AIAgent 的独立移动端仓库，只负责交互：聊天、语音、图片、
 
 - 仓库：https://github.com/GINKA-Star123/aiagent-frontend
 - 后端仓库：https://github.com/GINKA-Star123/OmniAgent（前后端分离）
-- 当前版本：**1.7.6+47**
+- 当前版本：**2.0.0+48**
 - 包名：`com.aiagent.mobile`
 
 ## 环境要求
@@ -30,6 +30,49 @@ flutter pub get
 
 激活码由后端侧生成（后端仓库的 `scripts/gen_activation_codes.py`），本仓库只负责粘贴使用。
 激活码内容：`base64url(JSON{主入口, 备用入口[], token, user_id, 昵称})`。
+
+
+## 2.0 功能总览
+
+### 聊天
+
+- QQ 风格全屏消息流、左右气泡、自定义头像、时间胶囊、日期分隔
+- 正在输入指示、回到底部、键盘弹出自动贴底、启动定位最新消息
+- 长消息折叠（10 行 / 320 字）、未读标记与分隔线、引用回复、复制引用
+- 多选：全选、批量复制、删除、分享、收藏
+- 消息长按：重试、引用、复制、分享、收藏、标记未读、删除
+- 按日期跳转、聊天统计、导出 Markdown、开场白建议（可换一批/设置直发）
+
+### 输入与语音
+
+- 草稿自动保存与恢复
+- 图片选择/拍照、语音录制：60 秒上限、倒计时、上滑取消、取消/发送面板
+- 语音消息显示时长；播放进度可拖动、倍速 1.0x–2.0x、断点续播
+
+### 媒体
+
+- 图片全屏查看：左右切换、缩放/拖动、双击 2 倍放大/复位
+- 图片分享、保存到相册、长按快捷操作
+
+### 搜索与收藏
+
+- 聊天搜索：发送者/类型筛选、结果计数、最近搜索、搜索历史记忆、点击定位
+- 收藏夹：搜索、发送者/类型筛选、时间排序、批量收藏、清空
+
+### 外观与设置
+
+- 聊天背景：自定义图片、5 套渐变预设、暗度（20%–90%）、模糊（0–20）
+- 字号 13–20、合并连续头像（可选）、自动播放语音、开场白直发
+- 头像上传/重置、服务器地址配置、激活/退出账号
+
+### 质量
+
+- 消息读屏语义、输入中 live region、关键按钮 tooltip
+- 离线发件箱、多入口故障切换、降级回复、遥测与反馈
+- 图片/偏好按用户隔离；收藏、未读、草稿、背景、头像持久化
+
+> 完整版本记录见 [CHANGELOG.md](CHANGELOG.md)。
+
 
 ## 本地运行
 
@@ -75,7 +118,7 @@ build/app/outputs/bundle/release/app-release.aab
 版本号在 `pubspec.yaml`：
 
 ```yaml
-version: 1.3.0+1   # versionName+versionCode
+version: 2.0.0+48  # versionName+versionCode
 ```
 
 每次发版递增 `+1` 的 versionCode。
@@ -86,7 +129,7 @@ version: 1.3.0+1   # versionName+versionCode
 
 ```powershell
 keytool -genkeypair -v ^
-  -keystore android/app/release.jks ^
+  -keystore android/app/aiagent-release.jks ^
   -storetype JKS -keyalg RSA -keysize 2048 -validity 10000 ^
   -alias aiagent ^
   -storepass <你的密码> -keypass <你的密码> ^
@@ -99,10 +142,10 @@ keytool -genkeypair -v ^
 storePassword=<你的密码>
 keyPassword=<你的密码>
 keyAlias=aiagent
-storeFile=release.jks
+storeFile=aiagent-release.jks
 ```
 
-`storeFile` 相对 `android/app/` 解析，所以 `release.jks` 放在 `android/app/release.jks`。
+`storeFile` 相对 `android/app/` 解析，所以 `aiagent-release.jks` 放在 `android/app/aiagent-release.jks`。
 
 ### 3. 不要提交密钥
 
@@ -124,7 +167,7 @@ android/local.properties
 
 触发方式：
 
-1. 打 tag：`git tag v1.3.0 && git push origin v1.3.0`
+1. 打 tag：`git tag v2.0.0 && git push origin v2.0.0`
 2. 或在 GitHub Actions 页面手动 **Run workflow**
 
 构建内容：
@@ -140,7 +183,7 @@ android/local.properties
 
 | Secret | 内容 |
 | --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | `release.jks` 的 Base64 |
+| `ANDROID_KEYSTORE_BASE64` | `aiagent-release.jks` 的 Base64 |
 | `ANDROID_STORE_PASSWORD` | keystore 密码 |
 | `ANDROID_KEY_PASSWORD` | key 密码 |
 | `ANDROID_KEY_ALIAS` | 例如 `aiagent` |
@@ -148,7 +191,7 @@ android/local.properties
 生成 Base64（PowerShell）：
 
 ```powershell
-[Convert]::ToBase64String([IO.File]::ReadAllBytes("android/app/release.jks")) | Set-Clipboard
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("android/app/aiagent-release.jks")) | Set-Clipboard
 ```
 
 - 手动 **Run workflow**：未配置 `ANDROID_KEYSTORE_BASE64` 时会警告并使用 debug 签名（仅自测）。
