@@ -17,15 +17,13 @@ class _FavoritesPageState extends State<FavoritesPage> {
   List<FavoriteMessage> _items = [];
   String _query = '';
   String _senderFilter = 'all';
+  bool _newestFirst = true;
   bool _loading = true;
 
   List<FavoriteMessage> get _filteredItems {
     final query = _query.trim().toLowerCase();
-    if (query.isEmpty) {
-      return _items;
-    }
-    return _items.where((item) {
-      if (!item.text.toLowerCase().contains(query)) {
+    final result = _items.where((item) {
+      if (query.isNotEmpty && !item.text.toLowerCase().contains(query)) {
         return false;
       }
       if (_senderFilter == 'me' && item.sender != '我') {
@@ -36,6 +34,12 @@ class _FavoritesPageState extends State<FavoritesPage> {
       }
       return true;
     }).toList();
+    result.sort(
+      (a, b) => _newestFirst
+          ? b.createdAt.compareTo(a.createdAt)
+          : a.createdAt.compareTo(b.createdAt),
+    );
+    return result;
   }
 
   @override
@@ -210,6 +214,15 @@ class _FavoritesPageState extends State<FavoritesPage> {
         backgroundColor: Colors.white,
         title: Text('收藏夹（${_items.length}）'),
         actions: [
+          IconButton(
+            tooltip: _newestFirst ? '当前最新在前' : '当前最早在前',
+            onPressed: () {
+              setState(() {
+                _newestFirst = !_newestFirst;
+              });
+            },
+            icon: const Icon(Icons.swap_vert),
+          ),
           IconButton(
             tooltip: '清空收藏',
             onPressed: _items.isEmpty ? null : _clearAll,

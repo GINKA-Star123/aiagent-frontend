@@ -2084,6 +2084,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     var imageCount = 0;
     var voiceCount = 0;
     var textChars = 0;
+    var assistantChars = 0;
     final days = <DateTime>{};
     for (final message in _messages) {
       switch (message.role) {
@@ -2091,6 +2092,7 @@ class _ChatHomePageState extends State<ChatHomePage>
           userCount += 1;
         case ChatRole.assistant:
           assistantCount += 1;
+          assistantChars += message.text.length;
         case ChatRole.system:
           systemCount += 1;
       }
@@ -2111,6 +2113,12 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
     final first = _messages.first.createdAt;
     final last = _messages.last.createdAt;
+    final averageChars = _messages.isEmpty
+        ? 0
+        : (textChars / _messages.length).round();
+    final averageReplyChars = assistantCount == 0
+        ? 0
+        : (assistantChars / assistantCount).round();
     showModalBottomSheet<void>(
       context: context,
       showDragHandle: true,
@@ -2161,6 +2169,16 @@ class _ChatHomePageState extends State<ChatHomePage>
                   icon: Icons.text_fields,
                   label: '文字量',
                   value: '$textChars 字',
+                ),
+                _StatRow(
+                  icon: Icons.straighten,
+                  label: '平均每条',
+                  value: '$averageChars 字',
+                ),
+                _StatRow(
+                  icon: Icons.smart_toy_outlined,
+                  label: '平均回复',
+                  value: '$averageReplyChars 字',
                 ),
                 _StatRow(
                   icon: Icons.event_available_outlined,
