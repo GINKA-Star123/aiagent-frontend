@@ -320,6 +320,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _needsActivation = false;
       _statusText = '准备好了';
     });
+    _jumpToLatestOnLoad();
 
     await _loadAvatars();
     await _restoreOutbox();
@@ -1718,6 +1719,30 @@ class _ChatHomePageState extends State<ChatHomePage>
       duration: const Duration(milliseconds: 240),
       curve: Curves.easeOut,
     );
+  }
+
+  void _jumpToLatestOnLoad() {
+    void jump() {
+      if (!_itemScrollController.isAttached || _messages.isEmpty) {
+        return;
+      }
+      _itemScrollController.jumpTo(index: _messages.length - 1);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) {
+        return;
+      }
+      if (_itemScrollController.isAttached) {
+        jump();
+      } else {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            jump();
+          }
+        });
+      }
+    });
   }
 
   void _scrollToBottomLater() {

@@ -5,7 +5,7 @@ AIAgent 的独立移动端仓库，只负责交互：聊天、语音、图片、
 
 - 仓库：https://github.com/GINKA-Star123/aiagent-frontend
 - 后端仓库：https://github.com/GINKA-Star123/OmniAgent（前后端分离）
-- 当前版本：**1.6.7+38**
+- 当前版本：**1.6.8+39**
 - 包名：`com.aiagent.mobile`
 
 ## 环境要求
