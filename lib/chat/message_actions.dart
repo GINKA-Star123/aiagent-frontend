@@ -14,6 +14,8 @@ class MessageActions {
     ValueChanged<ChatMessage>? onDelete,
     ValueChanged<ChatMessage>? onQuote,
     ValueChanged<ChatMessage>? onSelect,
+    ValueChanged<ChatMessage>? onToggleUnread,
+    bool markedUnread = false,
   }) async {
     final hasAudio = message.audioUrl.isNotEmpty;
 
@@ -32,6 +34,19 @@ class MessageActions {
                   onTap: () {
                     Navigator.of(context).pop();
                     onSelect(message);
+                  },
+                ),
+              if (onToggleUnread != null)
+                ListTile(
+                  leading: Icon(
+                    markedUnread
+                        ? Icons.mark_chat_read_outlined
+                        : Icons.mark_chat_unread_outlined,
+                  ),
+                  title: Text(markedUnread ? '清除未读标记' : '标记未读'),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    onToggleUnread(message);
                   },
                 ),
               if (message.status == ChatMessageStatus.failed ||

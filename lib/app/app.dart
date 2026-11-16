@@ -29,6 +29,7 @@ import '../chat/memory_status.dart';
 import '../chat/chat_search_page.dart';
 import '../chat/draft_store.dart';
 import '../chat/message_actions.dart';
+import '../chat/unread_marker_store.dart';
 import '../connectivity/backend_status.dart';
 import '../core/activation.dart';
 import '../core/feedback_store.dart';
@@ -146,6 +147,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _showJumpToBottom = false;
   String _playingAudioKey = '';
   ChatMessage? _quotedMessage;
+  String _unreadMarkerKey = '';
   final FocusNode _composerFocus = FocusNode();
   String _statusText = '正在初始化...';
   String _selectedImagePath = '';
@@ -385,6 +387,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     final identity = _identity;
     if (identity != null) {
       await DraftStore.clear(identity.userId);
+      await UnreadMarkerStore.clear(identity.userId);
     }
     _textController.clear();
     _draftTimer?.cancel();
@@ -402,6 +405,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _audioResumePositions.clear();
       _selectionMode = false;
       _selectedMessageKeys.clear();
+      _unreadMarkerKey = '';
       _myAvatarPath = '';
       _agentAvatarPath = '';
       _backgroundPath = '';
@@ -1214,6 +1218,70 @@ class _ChatHomePageState extends State<ChatHomePage>
     });
   }
 
+  Future<void> _toggleUnreadMarker(ChatMessage message) async {
+    final identity = _identity;
+    if (identity == null) {
+      return;
+    }
+    final key = _selectionKeyFor(message);
+    if (_unreadMarkerKey == key) {
+      await _clearUnreadMarker();
+      return;
+    }
+    setState(() {
+      _unreadMarkerKey = key;
+    });
+    await UnreadMarkerStore.save(identity.userId, key);
+    if (!mounted) {
+      return;
+    }
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('已标记未读')));
+  }
+
+  Future<void> _clearUnreadMarker() async {
+    final identity = _identity;
+    if (mounted) {
+      setState(() {
+        _unreadMarkerKey = '';
+      });
+    }
+    if (identity != null) {
+      await UnreadMarkerStore.clear(identity.userId);
+    }
+  }
+
+  Future<void> _jumpToUnread() async {
+    final index = _messages.indexWhere(
+      (message) => _selectionKeyFor(message) == _unreadMarkerKey,
+    );
+    if (index < 0) {
+      await _clearUnreadMarker();
+      return;
+    }
+    setState(() {
+      _highlightedMessageKey = _messageKey(_messages[index]);
+    });
+    _highlightTimer?.cancel();
+    _highlightTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _highlightedMessageKey = '';
+      });
+    });
+    if (_itemScrollController.isAttached) {
+      await _itemScrollController.scrollTo(
+        index: index,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOut,
+        alignment: 0.25,
+      );
+    }
+  }
+
   void _startSelection(ChatMessage message) {
     _composerFocus.unfocus();
     setState(() {
@@ -1327,6 +1395,9 @@ class _ChatHomePageState extends State<ChatHomePage>
       return;
     }
     final keys = selected.map(_selectionKeyFor).toSet();
+    if (keys.contains(_unreadMarkerKey)) {
+      await _clearUnreadMarker();
+    }
     for (final message in selected) {
       if (message.clientMessageId.isNotEmpty) {
         await _removeFromOutbox(message.clientMessageId);
@@ -1385,6 +1456,9 @@ class _ChatHomePageState extends State<ChatHomePage>
     final next = [..._messages]..remove(message);
     if (message.clientMessageId.isNotEmpty) {
       await _removeFromOutbox(message.clientMessageId);
+    }
+    if (_unreadMarkerKey == _selectionKeyFor(message)) {
+      await _clearUnreadMarker();
     }
     if (_playingAudioKey.isNotEmpty &&
         _playingAudioKey == _messageKey(message)) {
@@ -2047,6 +2121,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     final identity = _identity;
     if (identity != null) {
       await DraftStore.clear(identity.userId);
+      await UnreadMarkerStore.clear(identity.userId);
     }
     if (!mounted) {
       return;
@@ -2059,6 +2134,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _audioResumePositions.clear();
       _selectionMode = false;
       _selectedMessageKeys.clear();
+      _unreadMarkerKey = '';
       _statusText = '聊天历史已清空';
     });
   }
@@ -2077,6 +2153,17 @@ class _ChatHomePageState extends State<ChatHomePage>
     final dim = await BackgroundStore.loadDim(identity.userId);
     final blur = await BackgroundStore.loadBlur(identity.userId);
     final preset = await BackgroundStore.loadPreset(identity.userId);
+    final storedMarker = await UnreadMarkerStore.load(identity.userId);
+    final marker =
+        storedMarker.isNotEmpty &&
+            _messages.any(
+              (message) => _selectionKeyFor(message) == storedMarker,
+            )
+        ? storedMarker
+        : '';
+    if (storedMarker.isNotEmpty && marker.isEmpty) {
+      unawaited(UnreadMarkerStore.clear(identity.userId));
+    }
     if (!mounted) {
       return;
     }
@@ -2087,6 +2174,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _backgroundDim = dim;
       _backgroundBlur = blur;
       _backgroundPreset = preset;
+      _unreadMarkerKey = marker;
     });
   }
 
@@ -2165,6 +2253,8 @@ class _ChatHomePageState extends State<ChatHomePage>
                       onOpenSettings: _openSettingsPage,
                       onSearch: _openChatSearch,
                       onJumpDate: _showDateJumpPicker,
+                      hasUnreadMarker: _unreadMarkerKey.isNotEmpty,
+                      onJumpUnread: _jumpToUnread,
                       onExportChat: _exportChat,
                       onCheckHealth: () => _checkHealth(),
                       onStopAudio: _stopAudio,
@@ -2182,6 +2272,9 @@ class _ChatHomePageState extends State<ChatHomePage>
                           compactAvatars: _compactAvatars,
                           selectionMode: _selectionMode,
                           selectedMessageKeys: _selectedMessageKeys,
+                          unreadMarkerKey: _unreadMarkerKey,
+                          onToggleUnread: _toggleUnreadMarker,
+                          onClearUnread: _clearUnreadMarker,
                           myAvatarPath: _myAvatarPath,
                           agentAvatarPath: _agentAvatarPath,
                           typing:
@@ -2476,6 +2569,8 @@ class _ChatHeader extends StatelessWidget {
     required this.onOpenSettings,
     required this.onSearch,
     required this.onJumpDate,
+    required this.hasUnreadMarker,
+    required this.onJumpUnread,
     required this.onExportChat,
     required this.onCheckHealth,
     required this.onStopAudio,
@@ -2491,6 +2586,8 @@ class _ChatHeader extends StatelessWidget {
   final VoidCallback onOpenSettings;
   final VoidCallback onSearch;
   final VoidCallback onJumpDate;
+  final bool hasUnreadMarker;
+  final VoidCallback onJumpUnread;
   final VoidCallback onExportChat;
   final VoidCallback onCheckHealth;
   final VoidCallback onStopAudio;
@@ -2585,6 +2682,8 @@ class _ChatHeader extends StatelessWidget {
                 onStopAudio();
               } else if (value == 'jumpDate') {
                 onJumpDate();
+              } else if (value == 'jumpUnread') {
+                onJumpUnread();
               } else if (value == 'export') {
                 onExportChat();
               } else if (value == 'settings') {
@@ -2597,6 +2696,11 @@ class _ChatHeader extends StatelessWidget {
                 value: 'jumpDate',
                 child: Text('跳转日期'),
               ),
+              if (hasUnreadMarker)
+                const PopupMenuItem<String>(
+                  value: 'jumpUnread',
+                  child: Text('跳到未读'),
+                ),
               const PopupMenuItem<String>(value: 'export', child: Text('导出聊天')),
               if (speaking)
                 const PopupMenuItem<String>(value: 'stop', child: Text('停止语音')),
@@ -2749,6 +2853,9 @@ class _MessageList extends StatelessWidget {
     required this.compactAvatars,
     required this.selectionMode,
     required this.selectedMessageKeys,
+    required this.unreadMarkerKey,
+    required this.onToggleUnread,
+    required this.onClearUnread,
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.typing,
@@ -2781,6 +2888,9 @@ class _MessageList extends StatelessWidget {
   final bool compactAvatars;
   final bool selectionMode;
   final Set<String> selectedMessageKeys;
+  final String unreadMarkerKey;
+  final ValueChanged<ChatMessage> onToggleUnread;
+  final VoidCallback onClearUnread;
   final String myAvatarPath;
   final String agentAvatarPath;
   final bool typing;
@@ -2848,6 +2958,11 @@ class _MessageList extends StatelessWidget {
           selected:
               selectionMode &&
               selectedMessageKeys.contains(_selectionKeyFor(message)),
+          showUnreadMarker:
+              unreadMarkerKey.isNotEmpty &&
+              unreadMarkerKey == _selectionKeyFor(message),
+          onToggleUnread: onToggleUnread,
+          onClearUnread: onClearUnread,
           highlighted:
               highlightedMessageKey.isNotEmpty &&
               highlightedMessageKey == messageKey,
@@ -2966,6 +3081,52 @@ class _EmptyChatViewState extends State<_EmptyChatView> {
               label: const Text('换一批', style: TextStyle(fontSize: 12)),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _UnreadDivider extends StatelessWidget {
+  const _UnreadDivider({required this.onClear});
+
+  final VoidCallback onClear;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: '清除未读标记',
+      child: GestureDetector(
+        onTap: onClear,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              const Expanded(
+                child: Divider(color: Color(0xFFC74444), height: 1),
+              ),
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFC74444),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Text(
+                  '未读',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              const Expanded(
+                child: Divider(color: Color(0xFFC74444), height: 1),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -3254,6 +3415,9 @@ class _MessageBubble extends StatelessWidget {
     required this.hideAvatar,
     required this.selectionMode,
     required this.selected,
+    required this.showUnreadMarker,
+    required this.onToggleUnread,
+    required this.onClearUnread,
     required this.highlighted,
     required this.feedback,
     required this.fontSize,
@@ -3284,6 +3448,9 @@ class _MessageBubble extends StatelessWidget {
   final bool hideAvatar;
   final bool selectionMode;
   final bool selected;
+  final bool showUnreadMarker;
+  final ValueChanged<ChatMessage> onToggleUnread;
+  final VoidCallback onClearUnread;
   final bool highlighted;
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
@@ -3366,6 +3533,8 @@ class _MessageBubble extends StatelessWidget {
                 onDelete: onDelete,
                 onQuote: onQuote,
                 onSelect: onSelect,
+                onToggleUnread: onToggleUnread,
+                markedUnread: showUnreadMarker,
               );
             },
       child: Container(
@@ -3678,6 +3847,10 @@ class _MessageBubble extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          if (showUnreadMarker) ...[
+            _UnreadDivider(onClear: onClearUnread),
+            const SizedBox(height: 6),
+          ],
           if (showTime) ...[
             Center(
               child: Container(
