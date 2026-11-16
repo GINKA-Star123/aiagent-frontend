@@ -109,6 +109,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _autoPlayVoice = true;
   bool _openingRequested = false;
   bool _showJumpToBottom = false;
+  String _playingAudioKey = '';
   String _statusText = '正在初始化...';
   String _selectedImagePath = '';
 
@@ -334,6 +335,12 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
     setState(() {
       _speaking = speaking;
+      if (!speaking) {
+        _playingAudioKey = '';
+        if (_statusText == '正在播放语音') {
+          _statusText = '语音播放结束';
+        }
+      }
     });
   }
 
@@ -1038,6 +1045,54 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _historyStore.save(nextMessages);
   }
 
+  String _messageKey(ChatMessage message) {
+    return message.requestId.isNotEmpty
+        ? message.requestId
+        : message.clientMessageId;
+  }
+
+  Future<void> _deleteMessage(ChatMessage message) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('删除消息'),
+          content: const Text('只删除本机这条消息，不影响服务器记录。'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('取消'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('删除'),
+            ),
+          ],
+        );
+      },
+    );
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    final next = [..._messages]..remove(message);
+    if (message.clientMessageId.isNotEmpty) {
+      await _removeFromOutbox(message.clientMessageId);
+    }
+    if (_playingAudioKey.isNotEmpty &&
+        _playingAudioKey == _messageKey(message)) {
+      await _audioPlaybackService.stop();
+    }
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _messages = next;
+      _statusText = '已删除消息';
+    });
+    await _historyStore.save(next);
+  }
+
   Future<void> _playResponseAudio(String responseAudioUrl) async {
     final audioUrl = _apiClient.authorizedAudioUrl(responseAudioUrl);
     if (audioUrl.isEmpty) {
@@ -1057,10 +1112,22 @@ class _ChatHomePageState extends State<ChatHomePage>
   }
 
   Future<void> _playMessageAudio(ChatMessage message) async {
+    final key = _messageKey(message);
     final audioUrl = _apiClient.authorizedAudioUrl(message.audioUrl);
     if (audioUrl.isEmpty) {
       setState(() {
         _statusText = '这条消息没有可播放的语音';
+      });
+      return;
+    }
+    if (_playingAudioKey == key && _speaking) {
+      await _audioPlaybackService.stop();
+      if (!mounted) {
+        return;
+      }
+      setState(() {
+        _playingAudioKey = '';
+        _statusText = '已停止播放';
       });
       return;
     }
@@ -1070,6 +1137,7 @@ class _ChatHomePageState extends State<ChatHomePage>
         return;
       }
       setState(() {
+        _playingAudioKey = key;
         _statusText = '正在播放语音';
       });
     } catch (error) {
@@ -1077,6 +1145,7 @@ class _ChatHomePageState extends State<ChatHomePage>
         return;
       }
       setState(() {
+        _playingAudioKey = '';
         _statusText = '语音播放失败，可稍后重试';
       });
     }
@@ -1394,7 +1463,9 @@ class _ChatHomePageState extends State<ChatHomePage>
                             !_recording &&
                             _messages.isNotEmpty &&
                             _messages.last.role == ChatRole.user,
+                        playingAudioKey: _playingAudioKey,
                         onPlayAudio: _playMessageAudio,
+                        onDelete: _deleteMessage,
                         onRetry: _retryMessage,
                         onFeedback: _sendFeedback,
                       ),
@@ -1647,9 +1718,11 @@ class _MessageList extends StatelessWidget {
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.typing,
+    required this.playingAudioKey,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
+    required this.onDelete,
   });
 
   final List<ChatMessage> messages;
@@ -1658,9 +1731,11 @@ class _MessageList extends StatelessWidget {
   final String myAvatarPath;
   final String agentAvatarPath;
   final bool typing;
+  final String playingAudioKey;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
+  final ValueChanged<ChatMessage> onDelete;
 
   static bool _sameDay(DateTime a, DateTime b) {
     return a.year == b.year && a.month == b.month && a.day == b.day;
@@ -1686,15 +1761,23 @@ class _MessageList extends StatelessWidget {
             message.createdAt.difference(previous.createdAt).inMinutes.abs() >=
                 5 ||
             !_sameDay(previous.createdAt, message.createdAt);
+        final compact =
+            !showTime &&
+            previous.role == message.role &&
+            message.createdAt.difference(previous.createdAt).inMinutes.abs() <
+                3;
         return _MessageBubble(
           message: message,
           showTime: showTime,
+          compact: compact,
           feedback: feedback,
           myAvatarPath: myAvatarPath,
           agentAvatarPath: agentAvatarPath,
+          playingAudioKey: playingAudioKey,
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
           onFeedback: onFeedback,
+          onDelete: onDelete,
         );
       },
     );
@@ -1837,22 +1920,28 @@ class _MessageBubble extends StatelessWidget {
   const _MessageBubble({
     required this.message,
     required this.showTime,
+    required this.compact,
     required this.feedback,
     required this.myAvatarPath,
     required this.agentAvatarPath,
+    required this.playingAudioKey,
     required this.onPlayAudio,
     required this.onRetry,
     required this.onFeedback,
+    required this.onDelete,
   });
 
   final ChatMessage message;
   final bool showTime;
+  final bool compact;
   final Map<String, Map<String, dynamic>> feedback;
   final String myAvatarPath;
   final String agentAvatarPath;
+  final String playingAudioKey;
   final ValueChanged<ChatMessage> onPlayAudio;
   final ValueChanged<ChatMessage> onRetry;
   final Future<void> Function(ChatMessage, int, List<String>) onFeedback;
+  final ValueChanged<ChatMessage> onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -1898,8 +1987,10 @@ class _MessageBubble extends StatelessWidget {
         MessageActions.show(
           context: context,
           message: message,
+          playing: playingAudioKey == feedbackKey,
           onPlayAudio: onPlayAudio,
           onRetry: onRetry,
+          onDelete: onDelete,
         );
       },
       child: Container(
@@ -2011,13 +2102,23 @@ class _MessageBubble extends StatelessWidget {
         TextButton.icon(
           onPressed: () => onPlayAudio(message),
           style: TextButton.styleFrom(
-            foregroundColor: const Color(0xFF666666),
+            foregroundColor: playingAudioKey == feedbackKey
+                ? const Color(0xFFC74444)
+                : const Color(0xFF666666),
             padding: const EdgeInsets.symmetric(horizontal: 8),
             minimumSize: const Size(0, 30),
             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
           ),
-          icon: const Icon(Icons.volume_up_outlined, size: 16),
-          label: const Text('播放语音', style: TextStyle(fontSize: 12)),
+          icon: Icon(
+            playingAudioKey == feedbackKey
+                ? Icons.stop_circle_outlined
+                : Icons.volume_up_outlined,
+            size: 16,
+          ),
+          label: Text(
+            playingAudioKey == feedbackKey ? '停止播放' : '播放语音',
+            style: const TextStyle(fontSize: 12),
+          ),
         ),
       ],
       if (message.role == ChatRole.assistant && feedbackKey.isNotEmpty) ...[
@@ -2064,7 +2165,10 @@ class _MessageBubble extends StatelessWidget {
     ];
 
     return Padding(
-      padding: EdgeInsets.only(top: showTime ? 10 : 4, bottom: 4),
+      padding: EdgeInsets.only(
+        top: showTime ? 10 : (compact ? 2 : 4),
+        bottom: compact ? 2 : 4,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

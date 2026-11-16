@@ -8,7 +8,9 @@ class MessageActions {
     required BuildContext context,
     required ChatMessage message,
     required ValueChanged<ChatMessage> onPlayAudio,
+    bool playing = false,
     ValueChanged<ChatMessage>? onRetry,
+    ValueChanged<ChatMessage>? onDelete,
   }) async {
     final hasAudio = message.audioUrl.isNotEmpty;
 
@@ -45,11 +47,30 @@ class MessageActions {
               ),
               if (hasAudio)
                 ListTile(
-                  leading: const Icon(Icons.volume_up_outlined),
-                  title: const Text('播放语音'),
+                  leading: Icon(
+                    playing
+                        ? Icons.stop_circle_outlined
+                        : Icons.volume_up_outlined,
+                  ),
+                  title: Text(playing ? '停止播放' : '播放语音'),
                   onTap: () {
                     Navigator.of(context).pop();
                     onPlayAudio(message);
+                  },
+                ),
+              if (onDelete != null)
+                ListTile(
+                  leading: const Icon(
+                    Icons.delete_outline,
+                    color: Color(0xFFB3261E),
+                  ),
+                  title: const Text(
+                    '删除消息',
+                    style: TextStyle(color: Color(0xFFB3261E)),
+                  ),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    onDelete(message);
                   },
                 ),
               ListTile(
