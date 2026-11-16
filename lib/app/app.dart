@@ -122,6 +122,7 @@ class _ChatHomePageState extends State<ChatHomePage>
   Timer? _recordingTimer;
   bool _autoPlayVoice = true;
   double _chatFontSize = AppPreferences.defaultChatFontSize;
+  bool _compactAvatars = false;
   Timer? _draftTimer;
   bool _openingRequested = false;
   bool _showJumpToBottom = false;
@@ -269,6 +270,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _messages = history;
       _autoPlayVoice = _preferences.autoPlayVoice;
       _chatFontSize = _preferences.chatFontSize;
+      _compactAvatars = _preferences.compactAvatars;
       if (draft.isNotEmpty) {
         _textController.text = draft;
         _textController.selection = TextSelection.collapsed(
@@ -1370,6 +1372,16 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _openPresenceSession(force: true);
   }
 
+  Future<void> _setCompactAvatars(bool value) async {
+    await _preferences.setCompactAvatars(value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _compactAvatars = value;
+    });
+  }
+
   Future<void> _setChatFontSize(double value) async {
     await _preferences.setChatFontSize(value);
     if (!mounted) {
@@ -1454,6 +1466,8 @@ class _ChatHomePageState extends State<ChatHomePage>
             autoPlayVoice: _autoPlayVoice,
             chatFontSize: _chatFontSize,
             onChatFontSizeChanged: _setChatFontSize,
+            compactAvatars: _compactAvatars,
+            onCompactAvatarsChanged: _setCompactAvatars,
             onSaveApiBaseUrl: _saveApiBaseUrl,
             onAutoPlayVoiceChanged: _setAutoPlayVoice,
             onOpenProfile: _openProfilePage,
@@ -1691,6 +1705,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                         highlightedMessageKey: _highlightedMessageKey,
                         feedback: _feedback,
                         fontSize: _chatFontSize,
+                        compactAvatars: _compactAvatars,
                         myAvatarPath: _myAvatarPath,
                         agentAvatarPath: _agentAvatarPath,
                         typing:
@@ -2089,6 +2104,7 @@ class _MessageList extends StatelessWidget {
     required this.highlightedMessageKey,
     required this.feedback,
     required this.fontSize,
+    required this.compactAvatars,
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.typing,
@@ -2107,6 +2123,7 @@ class _MessageList extends StatelessWidget {
   final String highlightedMessageKey;
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
+  final bool compactAvatars;
   final String myAvatarPath;
   final String agentAvatarPath;
   final bool typing;
@@ -2155,6 +2172,7 @@ class _MessageList extends StatelessWidget {
           message: message,
           showTime: showTime,
           compact: compact,
+          hideAvatar: compactAvatars && compact,
           highlighted:
               highlightedMessageKey.isNotEmpty &&
               highlightedMessageKey == messageKey,
@@ -2325,6 +2343,7 @@ class _MessageBubble extends StatelessWidget {
     required this.message,
     required this.showTime,
     required this.compact,
+    required this.hideAvatar,
     required this.highlighted,
     required this.feedback,
     required this.fontSize,
@@ -2342,6 +2361,7 @@ class _MessageBubble extends StatelessWidget {
   final ChatMessage message;
   final bool showTime;
   final bool compact;
+  final bool hideAvatar;
   final bool highlighted;
   final Map<String, Map<String, dynamic>> feedback;
   final double fontSize;
@@ -2704,12 +2724,15 @@ class _MessageBubble extends StatelessWidget {
                 : MainAxisAlignment.start,
             children: [
               if (!isUser) ...[
-                _ChatAvatar(
-                  label: '绫',
-                  isUser: false,
-                  size: 36,
-                  imagePath: agentAvatarPath,
-                ),
+                if (hideAvatar)
+                  const SizedBox(width: 36)
+                else
+                  _ChatAvatar(
+                    label: '绫',
+                    isUser: false,
+                    size: 36,
+                    imagePath: agentAvatarPath,
+                  ),
                 const SizedBox(width: 8),
               ],
               Flexible(
@@ -2722,12 +2745,15 @@ class _MessageBubble extends StatelessWidget {
               ),
               if (isUser) ...[
                 const SizedBox(width: 8),
-                _ChatAvatar(
-                  label: '我',
-                  isUser: true,
-                  size: 36,
-                  imagePath: myAvatarPath,
-                ),
+                if (hideAvatar)
+                  const SizedBox(width: 36)
+                else
+                  _ChatAvatar(
+                    label: '我',
+                    isUser: true,
+                    size: 36,
+                    imagePath: myAvatarPath,
+                  ),
               ],
             ],
           ),

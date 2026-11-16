@@ -25,6 +25,8 @@ class SettingsPage extends StatefulWidget {
     required this.autoPlayVoice,
     required this.chatFontSize,
     required this.onChatFontSizeChanged,
+    required this.compactAvatars,
+    required this.onCompactAvatarsChanged,
     required this.onSaveApiBaseUrl,
     required this.onAutoPlayVoiceChanged,
     required this.onOpenProfile,
@@ -50,6 +52,8 @@ class SettingsPage extends StatefulWidget {
   final bool autoPlayVoice;
   final double chatFontSize;
   final Future<void> Function(double value) onChatFontSizeChanged;
+  final bool compactAvatars;
+  final Future<void> Function(bool value) onCompactAvatarsChanged;
   final Future<void> Function(String apiBaseUrl) onSaveApiBaseUrl;
   final Future<void> Function(bool value) onAutoPlayVoiceChanged;
   final VoidCallback onOpenProfile;
@@ -72,6 +76,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _loggingOut = false;
   late bool _autoPlayVoice;
   late double _chatFontSize;
+  late bool _compactAvatars;
   late String _myAvatarPath;
   late String _agentAvatarPath;
   late String _backgroundPath;
@@ -88,6 +93,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _apiBaseUrlController = TextEditingController(text: widget.apiBaseUrl);
     _autoPlayVoice = widget.autoPlayVoice;
     _chatFontSize = widget.chatFontSize;
+    _compactAvatars = widget.compactAvatars;
     _myAvatarPath = widget.myAvatarPath;
     _agentAvatarPath = widget.agentAvatarPath;
     _backgroundPath = widget.backgroundPath;
@@ -649,6 +655,20 @@ class _SettingsPageState extends State<SettingsPage> {
                   });
                 },
                 onChangeEnd: _saveChatFontSize,
+              ),
+              const Divider(height: 20),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                secondary: const Icon(Icons.view_agenda_outlined),
+                title: const Text('合并连续头像'),
+                subtitle: const Text('同一发送者 3 分钟内的连续消息只显示一次头像'),
+                value: _compactAvatars,
+                onChanged: (value) {
+                  setState(() {
+                    _compactAvatars = value;
+                  });
+                  widget.onCompactAvatarsChanged(value);
+                },
               ),
               const Divider(height: 20),
               SwitchListTile(
