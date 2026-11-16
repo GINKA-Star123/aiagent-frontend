@@ -19,6 +19,7 @@ import '../chat/chat_error.dart';
 import '../chat/chat_history_store.dart';
 import '../chat/chat_message.dart';
 import '../chat/memory_status.dart';
+import '../chat/chat_search_page.dart';
 import '../chat/message_actions.dart';
 import '../connectivity/backend_status.dart';
 import '../core/activation.dart';
@@ -1224,6 +1225,14 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  Future<void> _openChatSearch() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (context) => ChatSearchPage(messages: _messages),
+      ),
+    );
+  }
+
   Future<void> _openSettingsPage() async {
     await Navigator.of(context).push(
       MaterialPageRoute<void>(
@@ -1446,6 +1455,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                   speaking: _speaking,
                   onOpenVoiceCall: _openVoiceCallPage,
                   onOpenSettings: _openSettingsPage,
+                  onSearch: _openChatSearch,
                   onCheckHealth: () => _checkHealth(),
                   onStopAudio: _audioPlaybackService.stop,
                 ),
@@ -1541,6 +1551,7 @@ class _ChatHeader extends StatelessWidget {
     required this.speaking,
     required this.onOpenVoiceCall,
     required this.onOpenSettings,
+    required this.onSearch,
     required this.onCheckHealth,
     required this.onStopAudio,
   });
@@ -1553,6 +1564,7 @@ class _ChatHeader extends StatelessWidget {
   final bool speaking;
   final VoidCallback onOpenVoiceCall;
   final VoidCallback onOpenSettings;
+  final VoidCallback onSearch;
   final VoidCallback onCheckHealth;
   final VoidCallback onStopAudio;
 
@@ -1621,6 +1633,11 @@ class _ChatHeader extends StatelessWidget {
                 ),
               ],
             ),
+          ),
+          IconButton(
+            tooltip: '搜索聊天',
+            onPressed: onSearch,
+            icon: const Icon(Icons.search, color: Color(0xFF444444)),
           ),
           IconButton(
             tooltip: '语音通话',
