@@ -1195,6 +1195,25 @@ class _ChatHomePageState extends State<ChatHomePage>
     _composerFocus.requestFocus();
   }
 
+  bool get _allMessagesSelected {
+    return _messages.isNotEmpty &&
+        _messages.every(
+          (message) => _selectedMessageKeys.contains(_selectionKeyFor(message)),
+        );
+  }
+
+  void _toggleSelectAll() {
+    setState(() {
+      if (_allMessagesSelected) {
+        _selectedMessageKeys.clear();
+      } else {
+        _selectedMessageKeys.addAll(
+          _messages.map((message) => _selectionKeyFor(message)),
+        );
+      }
+    });
+  }
+
   void _startSelection(ChatMessage message) {
     _composerFocus.unfocus();
     setState(() {
@@ -2127,7 +2146,9 @@ class _ChatHomePageState extends State<ChatHomePage>
                   if (_selectionMode)
                     _SelectionHeader(
                       count: _selectedMessageKeys.length,
+                      allSelected: _allMessagesSelected,
                       onCancel: _cancelSelection,
+                      onToggleSelectAll: _toggleSelectAll,
                       onCopy: _copySelectedMessages,
                       onShare: _shareSelectedMessages,
                       onDelete: _deleteSelectedMessages,
@@ -2254,11 +2275,14 @@ class _ImagePagerState extends State<_ImagePager> {
   late final PageController _controller = PageController(
     initialPage: widget.initialIndex,
   );
+  final TransformationController _transformationController =
+      TransformationController();
   late int _index = widget.initialIndex;
 
   @override
   void dispose() {
     _controller.dispose();
+    _transformationController.dispose();
     super.dispose();
   }
 
@@ -2294,26 +2318,33 @@ class _ImagePagerState extends State<_ImagePager> {
               controller: _controller,
               itemCount: widget.imagePaths.length,
               onPageChanged: (value) {
+                _transformationController.value = Matrix4.identity();
                 setState(() {
                   _index = value;
                 });
               },
               itemBuilder: (context, index) {
                 final path = widget.imagePaths[index];
-                return InteractiveViewer(
-                  panEnabled: false,
-                  minScale: 1,
-                  maxScale: 4,
-                  child: Center(
-                    child: Image.file(
-                      File(path),
-                      fit: BoxFit.contain,
-                      errorBuilder: (context, error, stackTrace) {
-                        return const Text(
-                          '图片无法显示',
-                          style: TextStyle(color: Colors.white70),
-                        );
-                      },
+                return GestureDetector(
+                  onDoubleTap: () {
+                    _transformationController.value = Matrix4.identity();
+                  },
+                  child: InteractiveViewer(
+                    transformationController: _transformationController,
+                    panEnabled: false,
+                    minScale: 1,
+                    maxScale: 4,
+                    child: Center(
+                      child: Image.file(
+                        File(path),
+                        fit: BoxFit.contain,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Text(
+                            '图片无法显示',
+                            style: TextStyle(color: Colors.white70),
+                          );
+                        },
+                      ),
                     ),
                   ),
                 );
@@ -2560,14 +2591,18 @@ class _ChatHeader extends StatelessWidget {
 class _SelectionHeader extends StatelessWidget {
   const _SelectionHeader({
     required this.count,
+    required this.allSelected,
     required this.onCancel,
+    required this.onToggleSelectAll,
     required this.onCopy,
     required this.onShare,
     required this.onDelete,
   });
 
   final int count;
+  final bool allSelected;
   final VoidCallback onCancel;
+  final VoidCallback onToggleSelectAll;
   final VoidCallback onCopy;
   final VoidCallback onShare;
   final VoidCallback onDelete;
@@ -2597,6 +2632,11 @@ class _SelectionHeader extends StatelessWidget {
             ),
           ),
           const Spacer(),
+          IconButton(
+            tooltip: allSelected ? '取消全选' : '全选',
+            onPressed: onToggleSelectAll,
+            icon: Icon(allSelected ? Icons.deselect : Icons.select_all),
+          ),
           IconButton(
             tooltip: '复制所选',
             onPressed: count > 0 ? onCopy : null,
