@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -80,6 +81,8 @@ class _ChatHomePageState extends State<ChatHomePage>
   String _myAvatarPath = '';
   String _agentAvatarPath = '';
   String _backgroundPath = '';
+  double _backgroundDim = BackgroundStore.defaultDim;
+  double _backgroundBlur = BackgroundStore.defaultBlur;
   TelemetryService? _telemetry;
 
   final Uuid _uuid = const Uuid();
@@ -1267,6 +1270,8 @@ class _ChatHomePageState extends State<ChatHomePage>
             myAvatarPath: _myAvatarPath,
             agentAvatarPath: _agentAvatarPath,
             backgroundPath: _backgroundPath,
+            backgroundDim: _backgroundDim,
+            backgroundBlur: _backgroundBlur,
             onAvatarsChanged: _loadAvatars,
             onBackgroundChanged: _loadAvatars,
             apiBaseUrl: _apiConfig.apiBaseUrl,
@@ -1421,6 +1426,8 @@ class _ChatHomePageState extends State<ChatHomePage>
       AvatarOwner.agent,
     );
     final background = await BackgroundStore.load(identity.userId);
+    final dim = await BackgroundStore.loadDim(identity.userId);
+    final blur = await BackgroundStore.loadBlur(identity.userId);
     if (!mounted) {
       return;
     }
@@ -1428,6 +1435,8 @@ class _ChatHomePageState extends State<ChatHomePage>
       _myAvatarPath = myAvatar;
       _agentAvatarPath = agentAvatar;
       _backgroundPath = background;
+      _backgroundDim = dim;
+      _backgroundBlur = blur;
     });
   }
 
@@ -1468,7 +1477,11 @@ class _ChatHomePageState extends State<ChatHomePage>
       body: Stack(
         fit: StackFit.expand,
         children: [
-          _ChatBackground(imagePath: _backgroundPath),
+          _ChatBackground(
+            imagePath: _backgroundPath,
+            dim: _backgroundDim,
+            blur: _backgroundBlur,
+          ),
           SafeArea(
             child: Column(
               children: [
@@ -1555,9 +1568,15 @@ class _ChatHomePageState extends State<ChatHomePage>
 }
 
 class _ChatBackground extends StatelessWidget {
-  const _ChatBackground({required this.imagePath});
+  const _ChatBackground({
+    required this.imagePath,
+    required this.dim,
+    required this.blur,
+  });
 
   final String imagePath;
+  final double dim;
+  final double blur;
 
   @override
   Widget build(BuildContext context) {
@@ -1566,15 +1585,22 @@ class _ChatBackground extends StatelessWidget {
     if (path.isEmpty || !File(path).existsSync()) {
       return fallback;
     }
+    Widget image = Image.file(
+      File(path),
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) => fallback,
+    );
+    if (blur > 0.1) {
+      image = ImageFiltered(
+        imageFilter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: image,
+      );
+    }
     return Stack(
       fit: StackFit.expand,
       children: [
-        Image.file(
-          File(path),
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => fallback,
-        ),
-        ColoredBox(color: Colors.white.withValues(alpha: 0.62)),
+        image,
+        ColoredBox(color: Colors.white.withValues(alpha: dim.clamp(0.2, 0.9))),
       ],
     );
   }

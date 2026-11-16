@@ -13,6 +13,8 @@ class SettingsPage extends StatefulWidget {
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.backgroundPath,
+    required this.backgroundDim,
+    required this.backgroundBlur,
     required this.onAvatarsChanged,
     required this.onBackgroundChanged,
     required this.apiBaseUrl,
@@ -33,6 +35,8 @@ class SettingsPage extends StatefulWidget {
   final String myAvatarPath;
   final String agentAvatarPath;
   final String backgroundPath;
+  final double backgroundDim;
+  final double backgroundBlur;
   final Future<void> Function() onAvatarsChanged;
   final Future<void> Function() onBackgroundChanged;
   final String apiBaseUrl;
@@ -63,6 +67,8 @@ class _SettingsPageState extends State<SettingsPage> {
   late String _myAvatarPath;
   late String _agentAvatarPath;
   late String _backgroundPath;
+  late double _backgroundDim;
+  late double _backgroundBlur;
   final ImagePicker _imagePicker = ImagePicker();
   bool _pickingAvatar = false;
   bool _pickingBackground = false;
@@ -75,6 +81,8 @@ class _SettingsPageState extends State<SettingsPage> {
     _myAvatarPath = widget.myAvatarPath;
     _agentAvatarPath = widget.agentAvatarPath;
     _backgroundPath = widget.backgroundPath;
+    _backgroundDim = widget.backgroundDim;
+    _backgroundBlur = widget.backgroundBlur;
   }
 
   @override
@@ -402,6 +410,16 @@ class _SettingsPageState extends State<SettingsPage> {
     await widget.onBackgroundChanged();
   }
 
+  Future<void> _saveBackgroundDim(double value) async {
+    await BackgroundStore.saveDim(widget.userId, value);
+    await widget.onBackgroundChanged();
+  }
+
+  Future<void> _saveBackgroundBlur(double value) async {
+    await BackgroundStore.saveBlur(widget.userId, value);
+    await widget.onBackgroundChanged();
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -446,6 +464,35 @@ class _SettingsPageState extends State<SettingsPage> {
                 onPick: _pickBackground,
                 onReset: _backgroundPath.isEmpty ? null : _resetBackground,
               ),
+              if (_backgroundPath.isNotEmpty) ...[
+                const Divider(height: 20),
+                _BackgroundSlider(
+                  title: '背景暗度',
+                  valueLabel: '${(_backgroundDim * 100).round()}%',
+                  value: _backgroundDim,
+                  min: 0.2,
+                  max: 0.9,
+                  onChanged: (value) {
+                    setState(() {
+                      _backgroundDim = value;
+                    });
+                  },
+                  onChangeEnd: _saveBackgroundDim,
+                ),
+                _BackgroundSlider(
+                  title: '背景模糊',
+                  valueLabel: _backgroundBlur.round().toString(),
+                  value: _backgroundBlur,
+                  min: 0,
+                  max: 20,
+                  onChanged: (value) {
+                    setState(() {
+                      _backgroundBlur = value;
+                    });
+                  },
+                  onChangeEnd: _saveBackgroundBlur,
+                ),
+              ],
             ],
           ),
           const SizedBox(height: 16),
@@ -583,6 +630,52 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _BackgroundSlider extends StatelessWidget {
+  const _BackgroundSlider({
+    required this.title,
+    required this.valueLabel,
+    required this.value,
+    required this.min,
+    required this.max,
+    required this.onChanged,
+    required this.onChangeEnd,
+  });
+
+  final String title;
+  final String valueLabel;
+  final double value;
+  final double min;
+  final double max;
+  final ValueChanged<double> onChanged;
+  final ValueChanged<double> onChangeEnd;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(title, style: const TextStyle(fontSize: 13)),
+            const Spacer(),
+            Text(
+              valueLabel,
+              style: const TextStyle(fontSize: 12, color: Colors.black54),
+            ),
+          ],
+        ),
+        Slider(
+          value: value,
+          min: min,
+          max: max,
+          onChanged: onChanged,
+          onChangeEnd: onChangeEnd,
+        ),
+      ],
     );
   }
 }

@@ -7,6 +7,43 @@ import 'package:shared_preferences/shared_preferences.dart';
 class BackgroundStore {
   static const String _prefix = 'chat.background.path.';
 
+  static const String _dimPrefix = 'chat.background.dim.';
+  static const String _blurPrefix = 'chat.background.blur.';
+  static const double defaultDim = 0.62;
+  static const double defaultBlur = 0;
+
+  static Future<double> loadDim(String userId) async {
+    if (userId.isEmpty) {
+      return defaultDim;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getDouble(_dimPrefix + userId) ?? defaultDim).clamp(0.2, 0.9);
+  }
+
+  static Future<void> saveDim(String userId, double value) async {
+    if (userId.isEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_dimPrefix + userId, value.clamp(0.2, 0.9));
+  }
+
+  static Future<double> loadBlur(String userId) async {
+    if (userId.isEmpty) {
+      return defaultBlur;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    return (prefs.getDouble(_blurPrefix + userId) ?? defaultBlur).clamp(0, 20);
+  }
+
+  static Future<void> saveBlur(String userId, double value) async {
+    if (userId.isEmpty) {
+      return;
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble(_blurPrefix + userId, value.clamp(0, 20));
+  }
+
   static String _key(String userId) {
     return _prefix + userId;
   }
