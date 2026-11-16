@@ -21,6 +21,7 @@ import '../chat/chat_history_store.dart';
 import '../chat/chat_message.dart';
 import '../chat/memory_status.dart';
 import '../chat/chat_search_page.dart';
+import '../chat/draft_store.dart';
 import '../chat/message_actions.dart';
 import '../connectivity/backend_status.dart';
 import '../core/activation.dart';
@@ -111,6 +112,8 @@ class _ChatHomePageState extends State<ChatHomePage>
   bool _speaking = false;
   bool _recording = false;
   bool _autoPlayVoice = true;
+  double _chatFontSize = AppPreferences.defaultChatFontSize;
+  Timer? _draftTimer;
   bool _openingRequested = false;
   bool _showJumpToBottom = false;
   String _playingAudioKey = '';
@@ -128,6 +131,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _handleSpeakingChanged,
     );
     WidgetsBinding.instance.addObserver(this);
+    _textController.addListener(_onDraftChanged);
     _scrollController.addListener(_handleScroll);
     _initConnectivity();
     _bootstrap();
@@ -135,7 +139,9 @@ class _ChatHomePageState extends State<ChatHomePage>
 
   @override
   void dispose() {
+    _textController.removeListener(_onDraftChanged);
     _textController.dispose();
+    _draftTimer?.cancel();
     _composerFocus.dispose();
     _scrollController.removeListener(_handleScroll);
     _scrollController.dispose();
@@ -159,6 +165,7 @@ class _ChatHomePageState extends State<ChatHomePage>
     _outboxStore = OutboxStore();
     _feedbackStore = FeedbackStore();
     _preferences = await AppPreferences.load();
+    _chatFontSize = _preferences.chatFontSize;
 
     final storedCode = await _sessionStore.loadActivationCode();
     final envCode = ActivationConfig.rawFromEnvironment();
@@ -213,6 +220,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       refreshToken: existing?.refreshToken ?? '',
     );
     await _identityStore.save(identity);
+    final draft = await DraftStore.load(identity.userId);
 
     if (!mounted) {
       return;
@@ -250,6 +258,13 @@ class _ChatHomePageState extends State<ChatHomePage>
       _identity = identity;
       _messages = history;
       _autoPlayVoice = _preferences.autoPlayVoice;
+      _chatFontSize = _preferences.chatFontSize;
+      if (draft.isNotEmpty) {
+        _textController.text = draft;
+        _textController.selection = TextSelection.collapsed(
+          offset: draft.length,
+        );
+      }
       _loading = false;
       _needsActivation = false;
       _statusText = '准备好了';
@@ -309,12 +324,23 @@ class _ChatHomePageState extends State<ChatHomePage>
       _statusText = statusText;
       _openingRequested = false;
     });
+    final draft = await DraftStore.load(identity.userId);
+    if (mounted && draft.isNotEmpty && _textController.text.isEmpty) {
+      _textController.text = draft;
+      _textController.selection = TextSelection.collapsed(offset: draft.length);
+    }
     await _loadAvatars();
     await _checkHealth(silentWhenConnected: true);
     await _openPresenceSession();
   }
 
   Future<void> _logout() async {
+    final identity = _identity;
+    if (identity != null) {
+      await DraftStore.clear(identity.userId);
+    }
+    _textController.clear();
+    _draftTimer?.cancel();
     await _audioPlaybackService.stop();
     await _sessionStore.clear();
     await _identityStore.clear();
@@ -504,6 +530,7 @@ class _ChatHomePageState extends State<ChatHomePage>
       _sending = true;
       _statusText = imagePath.isEmpty ? '正在发送...' : '正在发送图片...';
     });
+    await DraftStore.clear(identity.userId);
     await _historyStore.save(_messages);
     _scrollToBottomLater();
 
@@ -1180,6 +1207,17 @@ class _ChatHomePageState extends State<ChatHomePage>
     }
   }
 
+  void _onDraftChanged() {
+    final identity = _identity;
+    if (identity == null) {
+      return;
+    }
+    _draftTimer?.cancel();
+    _draftTimer = Timer(const Duration(milliseconds: 500), () {
+      DraftStore.save(identity.userId, _textController.text);
+    });
+  }
+
   void _handleScroll() {
     if (!_scrollController.hasClients || !mounted) {
       return;
@@ -1239,6 +1277,16 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _openPresenceSession(force: true);
   }
 
+  Future<void> _setChatFontSize(double value) async {
+    await _preferences.setChatFontSize(value);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _chatFontSize = value;
+    });
+  }
+
   Future<void> _setAutoPlayVoice(bool value) async {
     await _preferences.setAutoPlayVoice(value);
     if (!mounted) {
@@ -1278,6 +1326,8 @@ class _ChatHomePageState extends State<ChatHomePage>
             username: _identity?.username ?? '未登录',
             statusText: _statusText,
             autoPlayVoice: _autoPlayVoice,
+            chatFontSize: _chatFontSize,
+            onChatFontSizeChanged: _setChatFontSize,
             onSaveApiBaseUrl: _saveApiBaseUrl,
             onAutoPlayVoiceChanged: _setAutoPlayVoice,
             onOpenProfile: _openProfilePage,
@@ -1403,6 +1453,10 @@ class _ChatHomePageState extends State<ChatHomePage>
     await _historyStore.clear();
     _outbox = [];
     await _outboxStore.save(_outbox);
+    final identity = _identity;
+    if (identity != null) {
+      await DraftStore.clear(identity.userId);
+    }
     if (!mounted) {
       return;
     }
@@ -1505,6 +1559,7 @@ class _ChatHomePageState extends State<ChatHomePage>
                         messages: _messages,
                         controller: _scrollController,
                         feedback: _feedback,
+                        fontSize: _chatFontSize,
                         myAvatarPath: _myAvatarPath,
                         agentAvatarPath: _agentAvatarPath,
                         typing:
@@ -1797,6 +1852,7 @@ class _MessageList extends StatelessWidget {
     required this.messages,
     required this.controller,
     required this.feedback,
+    required this.fontSize,
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.typing,
@@ -1811,6 +1867,7 @@ class _MessageList extends StatelessWidget {
   final List<ChatMessage> messages;
   final ScrollController controller;
   final Map<String, Map<String, dynamic>> feedback;
+  final double fontSize;
   final String myAvatarPath;
   final String agentAvatarPath;
   final bool typing;
@@ -1855,6 +1912,7 @@ class _MessageList extends StatelessWidget {
           showTime: showTime,
           compact: compact,
           feedback: feedback,
+          fontSize: fontSize,
           myAvatarPath: myAvatarPath,
           agentAvatarPath: agentAvatarPath,
           playingAudioKey: playingAudioKey,
@@ -2007,6 +2065,7 @@ class _MessageBubble extends StatelessWidget {
     required this.showTime,
     required this.compact,
     required this.feedback,
+    required this.fontSize,
     required this.myAvatarPath,
     required this.agentAvatarPath,
     required this.playingAudioKey,
@@ -2021,6 +2080,7 @@ class _MessageBubble extends StatelessWidget {
   final bool showTime;
   final bool compact;
   final Map<String, Map<String, dynamic>> feedback;
+  final double fontSize;
   final String myAvatarPath;
   final String agentAvatarPath;
   final String playingAudioKey;
@@ -2127,7 +2187,7 @@ class _MessageBubble extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: (fontSize - 3).clamp(11, 17).toDouble(),
                     height: 1.35,
                     color: isUser
                         ? Colors.white.withValues(alpha: 0.82)
@@ -2166,7 +2226,7 @@ class _MessageBubble extends StatelessWidget {
               Text(
                 bodyText,
                 style: TextStyle(
-                  fontSize: 15,
+                  fontSize: fontSize,
                   height: 1.42,
                   color: isUser ? Colors.white : const Color(0xFF222222),
                 ),

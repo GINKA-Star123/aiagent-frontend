@@ -5,6 +5,8 @@ class AppPreferences {
 
   static const String _autoPlayVoiceKey = 'app.auto_play_voice';
   static const String _onboardingCompletedKey = 'app.onboarding_completed';
+  static const String _chatFontSizeKey = 'app.chat_font_size';
+  static const double defaultChatFontSize = 15;
 
   final SharedPreferences _prefs;
 
@@ -19,6 +21,15 @@ class AppPreferences {
 
   Future<void> setAutoPlayVoice(bool value) async {
     await _prefs.setBool(_autoPlayVoiceKey, value);
+  }
+
+  double get chatFontSize {
+    final value = _prefs.getDouble(_chatFontSizeKey) ?? defaultChatFontSize;
+    return value.clamp(13, 20).toDouble();
+  }
+
+  Future<void> setChatFontSize(double value) async {
+    await _prefs.setDouble(_chatFontSizeKey, value.clamp(13, 20).toDouble());
   }
 
   bool get onboardingCompleted {

@@ -21,6 +21,8 @@ class SettingsPage extends StatefulWidget {
     required this.username,
     required this.statusText,
     required this.autoPlayVoice,
+    required this.chatFontSize,
+    required this.onChatFontSizeChanged,
     required this.onSaveApiBaseUrl,
     required this.onAutoPlayVoiceChanged,
     required this.onOpenProfile,
@@ -43,6 +45,8 @@ class SettingsPage extends StatefulWidget {
   final String username;
   final String statusText;
   final bool autoPlayVoice;
+  final double chatFontSize;
+  final Future<void> Function(double value) onChatFontSizeChanged;
   final Future<void> Function(String apiBaseUrl) onSaveApiBaseUrl;
   final Future<void> Function(bool value) onAutoPlayVoiceChanged;
   final VoidCallback onOpenProfile;
@@ -64,6 +68,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _clearing = false;
   bool _loggingOut = false;
   late bool _autoPlayVoice;
+  late double _chatFontSize;
   late String _myAvatarPath;
   late String _agentAvatarPath;
   late String _backgroundPath;
@@ -78,6 +83,7 @@ class _SettingsPageState extends State<SettingsPage> {
     super.initState();
     _apiBaseUrlController = TextEditingController(text: widget.apiBaseUrl);
     _autoPlayVoice = widget.autoPlayVoice;
+    _chatFontSize = widget.chatFontSize;
     _myAvatarPath = widget.myAvatarPath;
     _agentAvatarPath = widget.agentAvatarPath;
     _backgroundPath = widget.backgroundPath;
@@ -410,6 +416,10 @@ class _SettingsPageState extends State<SettingsPage> {
     await widget.onBackgroundChanged();
   }
 
+  Future<void> _saveChatFontSize(double value) async {
+    await widget.onChatFontSizeChanged(value);
+  }
+
   Future<void> _saveBackgroundDim(double value) async {
     await BackgroundStore.saveDim(widget.userId, value);
     await widget.onBackgroundChanged();
@@ -580,6 +590,20 @@ class _SettingsPageState extends State<SettingsPage> {
           _SettingsSection(
             title: '聊天',
             children: [
+              _BackgroundSlider(
+                title: '聊天字号',
+                valueLabel: _chatFontSize.round().toString(),
+                value: _chatFontSize,
+                min: 13,
+                max: 20,
+                onChanged: (value) {
+                  setState(() {
+                    _chatFontSize = value;
+                  });
+                },
+                onChangeEnd: _saveChatFontSize,
+              ),
+              const Divider(height: 20),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
                 secondary: const Icon(Icons.volume_up_outlined),
